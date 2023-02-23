@@ -10,6 +10,8 @@ on:
     branches:
       - main
       - release/**
+  issues:
+    types: [milestoned, demilestoned]
 
 permissions:
   contents: read
@@ -18,7 +20,9 @@ jobs:
   # checks that a milestone entry is present for a PR
   milestone-check:
     # If there is a `pr/no-milestone` label we ignore this check
-    if: "!contains(github.event.pull_request.labels.*.name, 'pr/no-milestone')"
+    if: |
+      (github.event.issue && github.event.issue.pull_request && !contains(github.event.issue.labels.*.name, 'pr/no-milestone')) ||
+      (github.event.pull_request && !contains(github.event.pull_request.labels.*.name, 'pr/no-milestone'))
     runs-on: ${{ fromJSON(vars.RUNNER) }}
     steps:
       - name: Checkout Actions
