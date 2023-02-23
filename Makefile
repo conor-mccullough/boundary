@@ -120,7 +120,7 @@ build-ui:
 
 .PHONY: build-plugins
 build-plugins:
-	@./scripts/plugins.sh
+	@CGO_ENABLED=$(CGO_ENABLED) BUILD_TAGS='$(BUILD_TAGS)' sh -c "'$(CURDIR)/scripts/plugins.sh'"
 
 .PHONY: clean-ui
 clean-ui:
