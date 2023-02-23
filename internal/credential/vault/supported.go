@@ -190,9 +190,13 @@ func gotNewServer(t testing.TB, opt ...TestOption) *TestVaultServer {
 	client.SetToken(server.RootToken)
 
 	err = pool.Retry(func() error {
-		if _, err := client.Sys().Health(); err != nil {
+		var hr *vault.HealthResponse
+		var err error
+		if hr, err = client.Sys().Health(); err != nil {
+			t.Logf("vault health failed: %s", err.Error())
 			return err
 		}
+		t.Logf("vault healthy %#v", hr)
 		return nil
 	})
 	require.NoError(err)
