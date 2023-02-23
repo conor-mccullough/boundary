@@ -61,7 +61,7 @@ jobs:
       - name: Determine plugin cache key
         id: plugin-cache-key
         run: |
-          echo "key=${{ runner.os }}-plugins-${{ hashFiles('plugins/**/*.go', 'plugins/**/go.sum') }}" >> $GITHUB_OUTPUT
+          echo "key=${{ runner.os }}-plugins-${{ hashFiles('plugins/**/*.go', 'plugins/**/go.sum', './scripts/plugins.sh', './Makefile') }}" >> $GITHUB_OUTPUT
       - name: Determin plugin cache path
         id: plugin-cache-paths
         run: |
