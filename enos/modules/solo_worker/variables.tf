@@ -52,25 +52,25 @@ variable "worker_monitoring" {
   default     = false
 }
 
-variable "worker_ebs_iops" {
+variable "ebs_iops" {
   description = "EBS IOPS for the root volume"
   type        = number
   default     = null
 }
 
-variable "worker_ebs_size" {
+variable "ebs_size" {
   description = "EBS volume size"
   type        = number
   default     = 8
 }
 
-variable "worker_ebs_type" {
+variable "ebs_type" {
   description = "EBS volume type"
   type        = string
   default     = "gp2"
 }
 
-variable "worker_ebs_throughput" {
+variable "ebs_throughput" {
   description = "EBS data throughput (MiB/s) (only for gp2)"
   default     = null
 }
@@ -98,4 +98,10 @@ variable "boundary_release" {
     version = string
   })
   default = null
+}
+
+variable "boundary_install_dir" {
+  description = "The remote directory where the Boundary binary will be installed"
+  type        = string
+  default     = "/opt/boundary/bin"
 }

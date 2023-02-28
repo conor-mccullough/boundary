@@ -31,8 +31,7 @@ resource "aws_subnet" "default" {
   vpc_id                  = aws_vpc.enos_vpc.id
   cidr_block              = "10.13.10.0/24"
   map_public_ip_on_launch = true
-  # TODO get a random az based on the provided VPC ID
-  availability_zone = data.aws_availability_zones.available.names[random_integer.az.result]
+  availability_zone       = data.aws_availability_zones.available.names[random_integer.az.result]
   tags = merge(
     var.common_tags,
     {
@@ -73,7 +72,7 @@ resource "aws_instance" "worker" {
   subnet_id              = aws_subnet.default.id
   key_name               = var.ssh_aws_keypair
   iam_instance_profile   = var.aws_iam_instance_profile_name
-  monitoring             = var.controller_monitoring
+  monitoring             = var.worker_monitoring
 
   root_block_device {
     iops        = var.ebs_iops
@@ -86,7 +85,7 @@ resource "aws_instance" "worker" {
   tags = merge(
     var.common_tags,
     {
-      Name = "${local.name_suffix}-boundary-solo-worker",
+      Name = "${local.name_prefix}-boundary-solo-worker",
       Type = local.boundary_cluster_tag,
     },
   )
