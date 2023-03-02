@@ -1,3 +1,13 @@
+variable "project_name" {
+  description = "Name of the project."
+  type        = string
+}
+
+variable "environment" {
+  description = "Name of the environment. (CI/Dev/Test/etc)"
+  type        = string
+}
+
 variable "vpc_name" {
   description = "The name of the existing VPC to be used for this module"
   type        = string
@@ -38,11 +48,6 @@ variable "worker_instance_type" {
 
 variable "ssh_aws_keypair" {
   description = "The name of the SSH keypair used to connect to EC2 instances"
-  type        = string
-}
-
-variable "aws_iam_instance_profile_name" {
-  description = "The name of the existing AWS instance profile to be used for this module"
   type        = string
 }
 
@@ -104,4 +109,19 @@ variable "boundary_install_dir" {
   description = "The remote directory where the Boundary binary will be installed"
   type        = string
   default     = "/opt/boundary/bin"
+}
+
+variable "iam_instance_profile_name" {
+  description = "The name of the AWS IAM instance profile from the Boundary cluster module"
+  type        = string
+}
+
+variable "name_prefix" {
+  description = "The name_prefix from the Boundary cluster module"
+  type        = string
+}
+
+variable "cluster_tag" {
+  description = "The cluster_tag from the Boundary cluster module"
+  type        = string
 }

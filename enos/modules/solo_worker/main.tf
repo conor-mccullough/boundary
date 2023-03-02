@@ -1,3 +1,19 @@
+terraform {
+  required_providers {
+    enos = {
+      source = "app.terraform.io/hashicorp-qti/enos"
+    }
+  }
+}
+
+resource "random_string" "cluster_id" {
+  length  = 8
+  lower   = true
+  upper   = false
+  numeric = false
+  special = false
+}
+
 resource "random_pet" "worker" {
   keepers = {
     # Generate a new pet name each time the instance has a new ARN
@@ -71,7 +87,7 @@ resource "aws_instance" "worker" {
   vpc_security_group_ids = [aws_security_group.default.id]
   subnet_id              = aws_subnet.default.id
   key_name               = var.ssh_aws_keypair
-  iam_instance_profile   = var.aws_iam_instance_profile_name
+  iam_instance_profile   = var.iam_instance_profile_name
   monitoring             = var.worker_monitoring
 
   root_block_device {
@@ -85,8 +101,8 @@ resource "aws_instance" "worker" {
   tags = merge(
     var.common_tags,
     {
-      Name = "${local.name_prefix}-boundary-solo-worker",
-      Type = local.boundary_cluster_tag,
+      Name = "${var.name_prefix}-boundary-solo-worker",
+      Type = var.boundary_cluster_tag,
     },
   )
 }

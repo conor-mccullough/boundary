@@ -26,6 +26,18 @@ module "boundary" {
   alb_listener_api_port = var.alb_listener_api_port
 }
 
+module "solo_worker" {
+  source = "./modules/solo_worker"
+
+  environment = var.environment
+  common_tags = {
+    "Project" : "Enos",
+    "randomtagid" : "hippocar",
+  }
+
+  ssh_aws_keypair = var.aws_ssh_keypair_name
+}
+
 module "build_crt" {
   source = "./modules/build_crt"
 }
