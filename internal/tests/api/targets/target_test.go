@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package targets_test
 
 import (
@@ -86,11 +89,11 @@ func TestCredentialSourcesASD(t *testing.T) {
 	require.NotNil(csVault)
 
 	lClient := credentiallibraries.NewClient(client)
-	lib1, err := lClient.Create(tc.Context(), csVault.Item.Id, credentiallibraries.WithVaultCredentialLibraryPath("something1"))
+	lib1, err := lClient.Create(tc.Context(), csVault.Item.Type, csVault.Item.Id, credentiallibraries.WithVaultCredentialLibraryPath("something1"))
 	require.NoError(err)
 	require.NotNil(lib1)
 
-	lib2, err := lClient.Create(tc.Context(), csVault.Item.Id, credentiallibraries.WithVaultCredentialLibraryPath("something2"))
+	lib2, err := lClient.Create(tc.Context(), csVault.Item.Type, csVault.Item.Id, credentiallibraries.WithVaultCredentialLibraryPath("something2"))
 	require.NoError(err)
 	require.NotNil(lib2)
 
@@ -204,11 +207,11 @@ func TestDeprecatedCredentialSourcesASD(t *testing.T) {
 	require.NotNil(csVault)
 
 	lClient := credentiallibraries.NewClient(client)
-	lib1, err := lClient.Create(tc.Context(), csVault.Item.Id, credentiallibraries.WithVaultCredentialLibraryPath("something1"))
+	lib1, err := lClient.Create(tc.Context(), csVault.Item.Type, csVault.Item.Id, credentiallibraries.WithVaultCredentialLibraryPath("something1"))
 	require.NoError(err)
 	require.NotNil(lib1)
 
-	lib2, err := lClient.Create(tc.Context(), csVault.Item.Id, credentiallibraries.WithVaultCredentialLibraryPath("something2"))
+	lib2, err := lClient.Create(tc.Context(), csVault.Item.Type, csVault.Item.Id, credentiallibraries.WithVaultCredentialLibraryPath("something2"))
 	require.NoError(err)
 	require.NotNil(lib2)
 
@@ -547,6 +550,45 @@ func TestCreateTarget_DirectlyAttachedAddress(t *testing.T) {
 	}
 }
 
+func TestUpdateTarget_DeleteAddress(t *testing.T) {
+	tc := controller.NewTestController(t, nil)
+	t.Cleanup(tc.Shutdown)
+
+	client := tc.Client()
+	at := tc.Token()
+	client.SetToken(at.Token)
+	_, proj := iam.TestScopes(t, tc.IamRepo(), iam.WithUserId(at.UserId))
+	tClient := targets.NewClient(client)
+
+	assert, require := assert.New(t), require.New(t)
+
+	// Create Target with address
+	addr := "127.0.0.1"
+	createResp, err := tClient.Create(tc.Context(), "tcp", proj.PublicId,
+		targets.WithName("test_target_addr_delete"), targets.WithAddress(addr), targets.WithTcpTargetDefaultPort(22))
+	require.NoError(err)
+	require.NotNil(createResp)
+	assert.Equal(addr, createResp.GetItem().Address)
+
+	// Update to delete address (set to null)
+	updateResp, err := tClient.Update(tc.Context(), createResp.Item.Id, createResp.Item.Version, targets.DefaultAddress())
+	require.NoError(err)
+	require.NotNil(updateResp)
+	assert.Empty(updateResp.GetItem().Address)
+
+	// Do it again with same version, should error
+	_, err = tClient.Update(tc.Context(), createResp.Item.Id, createResp.Item.Version, targets.DefaultAddress())
+	require.Error(err)
+
+	// Do it again with the correct version, ensure this is not an error.
+	secondUpdateResp, err := tClient.Update(tc.Context(), createResp.Item.Id, updateResp.Item.Version, targets.DefaultAddress())
+	require.NoError(err)
+	require.NotNil(secondUpdateResp)
+	assert.Empty(secondUpdateResp.GetItem().Address)
+
+	assert.NotEqual(updateResp.Item.Version, secondUpdateResp.Item.Version)
+}
+
 func comparableSlice(in []*targets.Target) []targets.Target {
 	var filtered []targets.Target
 	for _, i := range in {
@@ -654,4 +696,44 @@ func TestSet_Errors(t *testing.T) {
 	apiErr = api.AsServerError(err)
 	assert.NotNil(apiErr)
 	assert.EqualValues(http.StatusBadRequest, apiErr.Response().StatusCode())
+}
+
+func TestCreateTarget_WhitespaceInAddress(t *testing.T) {
+	require := require.New(t)
+	tc := controller.NewTestController(t, nil)
+	defer tc.Shutdown()
+
+	client := tc.Client()
+	token := tc.Token()
+	client.SetToken(token.Token)
+	_, proj := iam.TestScopes(t, tc.IamRepo(), iam.WithUserId(token.UserId))
+
+	tarClient := targets.NewClient(client)
+
+	tar, err := tarClient.Create(tc.Context(), "tcp", proj.GetPublicId(), targets.WithName("foo"), targets.WithTcpTargetDefaultPort(2), targets.WithAddress(" 127.0.0.1 "))
+	require.NoError(err)
+	require.NotNil(tar)
+	require.Equal("127.0.0.1", tar.GetItem().Address)
+}
+
+func TestUpdateTarget_WhitespaceInAddress(t *testing.T) {
+	require := require.New(t)
+	tc := controller.NewTestController(t, nil)
+	defer tc.Shutdown()
+
+	client := tc.Client()
+	token := tc.Token()
+	client.SetToken(token.Token)
+	_, proj := iam.TestScopes(t, tc.IamRepo(), iam.WithUserId(token.UserId))
+
+	tarClient := targets.NewClient(client)
+
+	tar, err := tarClient.Create(tc.Context(), "tcp", proj.GetPublicId(), targets.WithName("foo"), targets.WithTcpTargetDefaultPort(2), targets.WithAddress("127.0.0.1"))
+	require.NoError(err)
+	require.NotNil(tar)
+
+	updateResult, err := tarClient.Update(tc.Context(), tar.Item.Id, tar.Item.Version, targets.WithAddress(" 10.0.0.1 "))
+	require.NoError(err)
+	require.NotNil(updateResult)
+	require.Equal("10.0.0.1", updateResult.Item.Address)
 }

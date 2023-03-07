@@ -1,10 +1,12 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 //go:build !hsm
 
 package server
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -61,9 +63,7 @@ func TestServer_ReloadInitialUpstreams(t *testing.T) {
 	defer testController2.Shutdown()
 	require.NotEqual(testController.Config().DatabaseUrl, testController2.Config().DatabaseUrl)
 
-	authStoragePath, err := os.MkdirTemp("", "")
-	require.NoError(err)
-	t.Cleanup(func() { os.RemoveAll(authStoragePath) })
+	authStoragePath := t.TempDir()
 
 	wg := &sync.WaitGroup{}
 

@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 //go:build !hsm
 // +build !hsm
 
@@ -87,9 +90,7 @@ func TestServer_ReloadListener(t *testing.T) {
 	wd, _ := os.Getwd()
 	wd += "/test-fixtures/reload/"
 
-	td, err := os.MkdirTemp("", "boundary-test-")
-	require.NoError(err)
-	defer os.RemoveAll(td)
+	td := t.TempDir()
 
 	controllerKey := config.DevKeyGeneration()
 	workerAuthKey := config.DevKeyGeneration()

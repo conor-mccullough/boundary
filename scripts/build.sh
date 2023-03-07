@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (c) HashiCorp, Inc.
+# SPDX-License-Identifier: MPL-2.0
+
 #
 # This script builds the application from source for a single platform.
 set -e
@@ -14,7 +17,7 @@ DIR="$( cd -P "$( dirname "$SOURCE" )/.." && pwd )"
 cd "$DIR"
 
 if [ "${CI_BUILD}x" != "x" ]; then
-    source /home/circleci/.bashrc
+    [[ -f /home/circleci/.bashrc ]] && source /home/circleci/.bashrc
 fi
 
 # Set build tags
@@ -24,6 +27,15 @@ echo "==> Build tags: ${BUILD_TAGS}"
 # Get the git commit
 GIT_COMMIT="$(git rev-parse HEAD)"
 GIT_DIRTY="$(test -n "`git status --porcelain`" && echo "+CHANGES" || true)"
+
+# Get the build date from the latest commit since it can be used across all
+# builds
+function build_date() {
+  # It's tricky to do an RFC3339 format in a cross platform way, so we hardcode UTC
+  : "${DATE_FORMAT:="%Y-%m-%dT%H:%M:%SZ"}"
+  git show --no-show-signature -s --format=%cd --date=format:"$DATE_FORMAT" HEAD
+}
+BUILD_DATE=$(build_date)
 
 # If not explicitly cross-compiling, build for the current platform
 if [ "${GOOS}x" == "x" ]; then
@@ -54,7 +66,7 @@ if [ "${CI_BUILD}x" != "x" ]; then
     exit
 fi
 
-PRODUCT_VERSION=${PRODUCT_VERSION:=$(cat version/VERSION)}
+BASE_PRODUCT_VERSION=${BASE_PRODUCT_VERSION:=$(cat version/VERSION)}
 
 # Declare binary paths!
 BINARY_NAME="boundary${BINARY_SUFFIX}"
@@ -74,10 +86,11 @@ ${GO_CMD} build \
     -trimpath \
     -buildvcs=false \
     -ldflags "
-      -X github.com/hashicorp/boundary/version.GitCommit=${GIT_COMMIT}${GIT_DIRTY}
-      -X 'github.com/hashicorp/boundary/version.Version=$PRODUCT_VERSION'
+      -X 'github.com/hashicorp/boundary/version.GitCommit=${GIT_COMMIT}${GIT_DIRTY}'
+      -X 'github.com/hashicorp/boundary/version.Version=$BASE_PRODUCT_VERSION'
       -X 'github.com/hashicorp/boundary/version.VersionPrerelease=$PRERELEASE_PRODUCT_VERSION'
       -X 'github.com/hashicorp/boundary/version.VersionMetadata=$METADATA_PRODUCT_VERSION'
+      -X 'github.com/hashicorp/boundary/version.BuildDate=$BUILD_DATE'
       " \
     -o "$BIN_PATH" \
     ./cmd/boundary

@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package server
 
 import (
@@ -48,6 +51,7 @@ type options struct {
 	withActiveWorkers                      bool
 	withFeature                            version.Feature
 	withDirectlyConnected                  bool
+	withWorkerPool                         []string
 }
 
 func getDefaultOptions() options {
@@ -236,5 +240,12 @@ func WithFeature(feature version.Feature) Option {
 func WithDirectlyConnected(conn bool) Option {
 	return func(o *options) {
 		o.withDirectlyConnected = conn
+	}
+}
+
+// WithWorkerPool provides a slice of worker ids.
+func WithWorkerPool(workerIds []string) Option {
+	return func(o *options) {
+		o.withWorkerPool = workerIds
 	}
 }

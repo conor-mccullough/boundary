@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package version
 
 import (
@@ -69,6 +72,9 @@ func (c *Command) Run(args []string) int {
 	}
 	if verInfo.VersionMetadata != "" {
 		nonAttributeMap["Metadata"] = verInfo.VersionMetadata
+	}
+	if verInfo.BuildDate != "" {
+		nonAttributeMap["Build Date"] = verInfo.BuildDate
 	}
 
 	maxLength := base.MaxAttributesLength(nonAttributeMap, nil, nil)

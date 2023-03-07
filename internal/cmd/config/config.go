@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package config
 
 import (
@@ -33,6 +36,8 @@ import (
 	"github.com/hashicorp/hcl/hcl/ast"
 	"github.com/mitchellh/mapstructure"
 )
+
+var extraParsingFuncs []func(*Config) error
 
 const (
 	desktopCorsOrigin = "serve://boundary"
@@ -185,6 +190,9 @@ type Controller struct {
 	//
 	// TODO: This field is currently internal.
 	SchedulerRunJobInterval time.Duration `hcl:"-"`
+
+	// License is the license used by HCP builds
+	License string `hcl:"license"`
 }
 
 func (c *Controller) InitNameIfEmpty() error {
@@ -851,6 +859,12 @@ func Parse(d string) (*Config, error) {
 		}
 	}
 
+	for _, f := range extraParsingFuncs {
+		if err := f(result); err != nil {
+			return nil, err
+		}
+	}
+
 	return result, nil
 }
 
@@ -1103,7 +1117,7 @@ func (c *Config) SetupWorkerInitialUpstreams() error {
 		}
 		// Best effort see if it's a domain name and if not assume it must match
 		host, _, err := net.SplitHostPort(c.Worker.InitialUpstreams[0])
-		if err != nil && strings.Contains(err.Error(), "missing port in address") {
+		if err != nil && strings.Contains(err.Error(), globals.MissingPortErrStr) {
 			err = nil
 			host = c.Worker.InitialUpstreams[0]
 		}

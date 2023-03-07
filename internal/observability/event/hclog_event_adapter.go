@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package event
 
 import (
@@ -213,6 +216,11 @@ func (h *HclogLoggerAdapter) ResetNamed(name string) hclog.Logger {
 		name:     name,
 		withArgs: newArgs,
 	}
+}
+
+// GetLevel returns the current level
+func (h *HclogLoggerAdapter) GetLevel() hclog.Level {
+	return h.level
 }
 
 // Updates the level. This should affect all related loggers as well,

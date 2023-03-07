@@ -1,3 +1,6 @@
+# Copyright (c) HashiCorp, Inc.
+# SPDX-License-Identifier: MPL-2.0
+
 # Infrastructure
 variable "aws_ssh_keypair_name" {
   description = "Name of the AWS keypair Enos will use to connect"
@@ -81,6 +84,12 @@ variable "local_boundary_dir" {
   type        = string
 }
 
+variable "local_boundary_ui_dir" {
+  description = "Path to local boundary-ui directory"
+  type        = string
+  default     = null
+}
+
 variable "crt_bundle_path" {
   description = "Path to CRT generated boundary bundle"
   type        = string
@@ -96,12 +105,6 @@ variable "boundary_install_dir" {
 variable "tfc_api_token" {
   description = "The Terraform Cloud QTI Organization API token."
   type        = string
-}
-
-variable "skip_failing_bats_tests" {
-  description = "Skip known Bats test failures"
-  type        = string
-  default     = "false"
 }
 
 variable "vault_instance_type" {
@@ -126,4 +129,10 @@ variable "local_build_target" {
   description = "Which make build target(s) to use for the local builder variant"
   type        = string
   default     = "build-ui build"
+}
+
+variable "e2e_debug_no_run" {
+  description = "If set, this will prevent test suites from running"
+  type        = bool
+  default     = false
 }

@@ -1,3 +1,6 @@
+-- Copyright (c) HashiCorp, Inc.
+-- SPDX-License-Identifier: MPL-2.0
+
 begin;
 
   alter table session drop constraint session_scope_id_fkey;
@@ -35,7 +38,7 @@ begin;
   $$ language plpgsql;
 
   -- Replaces trigger from 01/50_session.up.sql
-  -- Replaced trigger in 70/02_sessions.up.sql
+  -- Replaced trigger in 60/02_sessions.up.sql
   create or replace function insert_session() returns trigger
   as $$
   begin

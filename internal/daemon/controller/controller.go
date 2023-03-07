@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package controller
 
 import (
@@ -28,8 +31,8 @@ import (
 	kmsjob "github.com/hashicorp/boundary/internal/kms/job"
 	"github.com/hashicorp/boundary/internal/observability/event"
 	"github.com/hashicorp/boundary/internal/plugin/host"
-	hostplugin "github.com/hashicorp/boundary/internal/plugin/host"
 	"github.com/hashicorp/boundary/internal/scheduler"
+	"github.com/hashicorp/boundary/internal/scheduler/cleaner"
 	"github.com/hashicorp/boundary/internal/scheduler/job"
 	"github.com/hashicorp/boundary/internal/server"
 	serversjob "github.com/hashicorp/boundary/internal/server/job"
@@ -39,6 +42,7 @@ import (
 	host_plugin_assets "github.com/hashicorp/boundary/plugins/host"
 	"github.com/hashicorp/boundary/sdk/pbs/plugin"
 	external_host_plugins "github.com/hashicorp/boundary/sdk/plugins/host"
+	"github.com/hashicorp/boundary/version"
 	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/go-secure-stdlib/mlock"
 	"github.com/hashicorp/go-secure-stdlib/pluginutil/v2"
@@ -51,12 +55,12 @@ import (
 type downstreamRouter interface {
 	// StartRouteMgmtTicking starts a ticker which manages the router's
 	// connections.
-	StartRouteMgmtTicking(context.Context, func() string, int) error
+	StartConnectionMgmtTicking(context.Context, func() string, int) error
 
 	// ProcessPendingConnections starts a function that continually processes
 	// incoming client connections. This only returns when the provided context
 	// is done.
-	StartProcessingPendingConnections(context.Context, func() string)
+	StartProcessingPendingConnections(context.Context, func() string) error
 }
 
 // downstreamWorkersTicker defines an interface for a ticker that maintains the
@@ -70,8 +74,8 @@ type downstreamWorkersTicker interface {
 var (
 	downstreamRouterFactory func() downstreamRouter
 
-	downstreamersFactory           func(context.Context, string) (common.Downstreamers, error)
-	downstreamWorkersTickerFactory func(context.Context, string, common.Downstreamers, downstreamRouter) (downstreamWorkersTicker, error)
+	downstreamersFactory           func(context.Context, string, string) (common.Downstreamers, error)
+	downstreamWorkersTickerFactory func(context.Context, string, string, common.Downstreamers, downstreamRouter) (downstreamWorkersTicker, error)
 	commandClientFactory           func(context.Context, *Controller) error
 )
 
@@ -238,9 +242,9 @@ func New(ctx context.Context, conf *Config) (*Controller, error) {
 		switch enabledPlugin {
 		case base.EnabledPluginHostLoopback:
 			plg := pluginhost.NewWrappingPluginClient(pluginhost.NewLoopbackPlugin())
-			opts := []hostplugin.Option{
-				hostplugin.WithDescription("Provides an initial loopback host plugin in Boundary"),
-				hostplugin.WithPublicId(conf.DevLoopbackHostPluginId),
+			opts := []host.Option{
+				host.WithDescription("Provides an initial loopback host plugin in Boundary"),
+				host.WithPublicId(conf.DevLoopbackHostPluginId),
 			}
 			if _, err = conf.RegisterHostPlugin(ctx, "loopback", plg, opts...); err != nil {
 				return nil, err
@@ -260,7 +264,7 @@ func New(ctx context.Context, conf *Config) (*Controller, error) {
 				return nil, fmt.Errorf("error creating %s host plugin: %w", pluginType, err)
 			}
 			conf.ShutdownFuncs = append(conf.ShutdownFuncs, cleanup)
-			if _, err := conf.RegisterHostPlugin(ctx, pluginType, client, hostplugin.WithDescription(fmt.Sprintf("Built-in %s host plugin", enabledPlugin.String()))); err != nil {
+			if _, err := conf.RegisterHostPlugin(ctx, pluginType, client, host.WithDescription(fmt.Sprintf("Built-in %s host plugin", enabledPlugin.String()))); err != nil {
 				return nil, fmt.Errorf("error registering %s host plugin: %w", pluginType, err)
 			}
 		}
@@ -389,7 +393,8 @@ func New(ctx context.Context, conf *Config) (*Controller, error) {
 	}
 
 	if downstreamersFactory != nil {
-		c.downstreamWorkers, err = downstreamersFactory(ctx, "root")
+		boundVer := version.Get().VersionNumber()
+		c.downstreamWorkers, err = downstreamersFactory(ctx, "root", boundVer)
 		if err != nil {
 			return nil, fmt.Errorf("unable to initialize downstream workers graph: %w", err)
 		}
@@ -466,7 +471,7 @@ func (c *Controller) Start() error {
 		}()
 		go func() {
 			defer c.tickerWg.Done()
-			err := c.downstreamRoutes.StartRouteMgmtTicking(
+			err := c.downstreamRoutes.StartConnectionMgmtTicking(
 				c.baseContext,
 				servNameFn,
 				-1,
@@ -479,7 +484,8 @@ func (c *Controller) Start() error {
 	if downstreamWorkersTickerFactory != nil {
 		// we'll use "root" to designate that this is the root of the graph (aka
 		// a controller)
-		dswTicker, err := downstreamWorkersTickerFactory(c.baseContext, "root", c.downstreamWorkers, c.downstreamRoutes)
+		boundVer := version.Get().VersionNumber()
+		dswTicker, err := downstreamWorkersTickerFactory(c.baseContext, "root", boundVer, c.downstreamWorkers, c.downstreamRoutes)
 		if err != nil {
 			return fmt.Errorf("error creating downstream workers ticker: %w", err)
 		}
@@ -511,6 +517,9 @@ func (c *Controller) registerJobs() error {
 		return err
 	}
 	if err := kmsjob.RegisterJobs(c.baseContext, c.scheduler, c.kms); err != nil {
+		return err
+	}
+	if err := cleaner.RegisterJob(c.baseContext, c.scheduler, rw); err != nil {
 		return err
 	}
 

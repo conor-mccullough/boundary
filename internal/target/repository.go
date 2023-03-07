@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package target
 
 import (
@@ -272,6 +275,12 @@ func (r *Repository) ListTargets(ctx context.Context, opt ...Option) ([]Target, 
 			address = v
 		}
 		subtype, err := t.targetSubtype(ctx, address)
+		if errors.Is(err, errTargetSubtypeNotFound) {
+			// In cases where we have mixed target types and the controller
+			// doesn't support all of them, we want to ignore if we can't find
+			// the target subtype and continue listing the others we do support.
+			continue
+		}
 		if err != nil {
 			return nil, errors.Wrap(ctx, err, op)
 		}
@@ -411,6 +420,7 @@ func (r *Repository) CreateTarget(ctx context.Context, target Target, opt ...Opt
 	var address *Address
 	var err error
 	if t.GetAddress() != "" {
+		t.SetAddress(strings.TrimSpace(t.GetAddress()))
 		address, err = NewAddress(t.GetPublicId(), t.GetAddress())
 		if err != nil {
 			return nil, nil, nil, errors.Wrap(ctx, err, op)
@@ -505,6 +515,7 @@ func (r *Repository) UpdateTarget(ctx context.Context, target Target, version ui
 		case strings.EqualFold("egressworkerfilter", f):
 		case strings.EqualFold("ingressworkerfilter", f):
 		case strings.EqualFold("address", f):
+			target.SetAddress(strings.TrimSpace(target.GetAddress()))
 			addressEndpoint = target.GetAddress()
 		default:
 			return nil, nil, nil, db.NoRowsAffected, errors.New(ctx, errors.InvalidFieldMask, op, fmt.Sprintf("invalid field mask: %s", f))
@@ -617,12 +628,16 @@ func (r *Repository) UpdateTarget(ctx context.Context, target Target, version ui
 				var err error
 				address = allocTargetAddress()
 				address.TargetAddress.TargetId = t.GetPublicId()
-				rowsUpdated, err = w.Delete(ctx, address, db.WithOplog(oplogWrapper, address.oplog(oplog.OpType_OP_TYPE_DELETE)))
+				rowsDeleted, err := w.Delete(ctx, address, db.WithOplog(oplogWrapper, address.oplog(oplog.OpType_OP_TYPE_DELETE)))
 				if err != nil {
 					return errors.Wrap(ctx, err, op, errors.WithMsg("unable to delete target address"))
 				}
-				if rowsUpdated > 1 {
+				if rowsDeleted > 1 {
 					return errors.New(ctx, errors.MultipleRecords, op, "more than 1 target resource would have been deleted")
+				}
+				// If the only update was deleting an address, consider this as one "row" being updated.
+				if rowsUpdated == 0 && rowsDeleted == 1 {
+					rowsUpdated = 1
 				}
 			default:
 				address, err = fetchAddress(ctx, read, t.GetPublicId())

@@ -4,6 +4,61 @@ Canonical reference for changes, improvements, and bugfixes for Boundary.
 
 ## Next
 
+### Bug Fixes
+
+* cli: Fix fallback parsing of un-typed credentials for `boundary connect`.
+  When using a vault credential library with no credential type set, boundary
+  will perform a best effort attempt to parse any brokered credentials. If the
+  credentials are successfully parsed, they can be used by the subprocess
+  spawned when using the connect subcommands, i.e. `ssh` or `psql`. With the
+  change to the vault credential library subtype, this fallback parsing would
+  fail. Note that if the credential library has a credential type, by using
+  `-credential-type` when creating the credential library, the credential was
+  correctly parsed. This fallback parsing is now fixed, but in order to support
+  older clients, credential libraries will need to be recreated with a
+  credential type. [PR](https://github.com/hashicorp/boundary/pull/2989)
+* ui: Fix credential library not saving correctly when trying to save it as a
+  generic secrets type. ([PR](https://github.com/hashicorp/boundary-ui/pull/1640))
+
+## 0.12.0 (2023/01/24)
+
+### Deprecations/Changes
+
+* In Boundary 0.9.0, targets were updated to require a default port value. This
+  had been the original intention; it was a mistake that it was optional.
+  Unfortunately, due to a separate defect in the update verification logic for
+  static hosts, it was possible for a host to be updated (but not created) with
+  a port. This meant that targets could use ports attached to host addresses,
+  which was not the intention and leads to confusing behavior across different
+  installations. In this version, updating static hosts will no longer allow
+  ports to be part of the address; when authorizing a session, any port on such
+  a host will be ignored in favor of the default port on the target. In Boundary
+  0.14.0, this will become an error instead. As a consequence, it means that the
+  fallback logic for targets that did not have a default port defined is no
+  longer in service; all targets must now have a default port defined.
+* With the introduction of `vault-ssh-certificate` credential libraries, the
+  `vault` credential library subtype is being renamed to `vault-generic` to
+  denote it as a credential library that can be used in a generalized way to
+  issue credentials from vault. Existing credential libraries with the
+  subtype of `vault` will be updated to `vault-generic`. The subtype of
+  `vault` will still be accepted as a valid subtype in API requests to the
+  credential libraries endpoints, but is deprecated. Instead `vault-generic`
+  should be used. In addition the `boundary credential-libraries create
+  vault` and `boundary credential-libraries update vault` subcommands will
+  still function, but are deprecated. Instead `boundary credential-libraries
+  create vault-generic` and `boundary credential-libraries update
+  vault-generic` should be used. Also note that any credential library created
+  using the subtype of `vault`, either via the API or via the deprecated
+  subcommand, will have the subtype set to `vault-generic`. The deprecated
+  subtype and subcommands will be removed in boundary 0.14.0, at which point
+  `vault-generic` must be used.
+* In Boundary 0.1.8 using the `-format=json` option with the cli would provide
+  a `status_code` for successful API requests from the cli. However, in the
+  case where an error was returned, the JSON would use `status` instead. This
+  inconsistency has been fixed, with `status_code` being used in both cases.
+  For error cases `status` will still be populated, but is deprecated and will
+  be removed in 0.14.0.
+
 ### New and Improved
 
 * Direct Address Targets: You can now set an address directly on a target,
@@ -15,12 +70,39 @@ Canonical reference for changes, improvements, and bugfixes for Boundary.
 * metrics: Adds accepted connections and closed connections counters to keep track
   downstream connections for worker and controller servers.
   ([PR](https://github.com/hashicorp/boundary/pull/2668))
+* Egress and Ingress worker filters: The target `worker_filter` field has been deprecated and 
+ replaced with egress and ingress worker filters. Egress worker filters determine which workers are
+ used to access targets. Ingress worker filters (HCP Boundary only) determine which workers are 
+ used to connect with a client to initiate a session. ([PR](https://github.com/hashicorp/boundary/pull/2654))
+* Multi-Hop Sessions (HCP Boundary only): Multi-hop PKI workers can communicate with each other to serve 
+ 2 primary purposes: authentication and session proxying. This results in the ability to chain 
+ multiple workers together to access services hidden under layers of network security. Multi-hop 
+ workers can also establish a TCP session through multiple workers, with the ability to reverse 
+ proxy and establish a connection.
+* Vault SSH certificate credential library: A new credential library that uses
+  the vault ssh secret engine to generate ssh private key and certificates. The
+  library can be used as an injected application credential source for targets
+  that support credential injection. ([PR](https://github.com/hashicorp/boundary/pull/2860))
+* ui: Add support for managed groups in add-principals list.
+  ([PR](https://github.com/hashicorp/boundary-ui/pull/1548))
 
 ### Bug Fixes
 
 * plugins: Ignore `SIGHUP` sent to parent process; some init systems, notably
   `dumb-init`, would pass them along to the child processes and cause the
   plugin to exit ([PR](https://github.com/hashicorp/boundary/pull/2677))
+* data warehouse: Fix bug that caused credential dimensions to not get
+    associated with session facts ([PR](https://github.com/hashicorp/boundary/pull/2787)).
+* sessions: Fix two authorizeSession race conditions in handleProxy. ([PR](https://github.com/hashicorp/boundary/pull/2795))
+* cli: When using `-format=json` the JSON was inconsistent in how it reported
+  status codes. In successful cases it would use `status_code`, but in error
+  cases it would use `status`. Now `status_code` is used in both cases. In
+  error cases `status` is still populated, see the deprecations above for
+  more details. ([PR](https://github.com/hashicorp/boundary/pull/2887))
+* database: Add job that automatically cleans up completed runs in the `job_run` table.
+  ([PR](https://github.com/hashicorp/boundary/pull/2866))
+* core: Linux packages now have vendor label and set the default label to HashiCorp.
+  This fix is implemented for any future releases, but will not be updated for historical releases.
 
 ## 0.11.2 (2022/12/09)
 

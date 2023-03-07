@@ -6,6 +6,9 @@ THIS_DIR := $(dir $(realpath $(firstword $(MAKEFILE_LIST))))
 TMP_DIR := $(shell mktemp -d)
 REPO_PATH := github.com/hashicorp/boundary
 
+TEST_PACKAGE ?= ./...
+TEST_TIMEOUT ?= 30m
+
 CGO_ENABLED?=0
 GO_PATH = $(shell go env GOPATH)
 
@@ -24,6 +27,7 @@ tools: golangci-lint
 	go generate -tags tools tools/tools.go
 	go install github.com/bufbuild/buf/cmd/buf@v1.3.1
 	go install github.com/mfridman/tparse@v0.10.3
+	go install github.com/hashicorp/copywrite@v0.15.0
 
 # golangci-lint recommends installing the binary directly, instead of using go get
 # See the note: https://golangci-lint.run/usage/install/#install-from-source
@@ -32,16 +36,12 @@ golangci-lint:
 	$(eval GOLINT_INSTALLED := $(shell which golangci-lint))
 
 	if [ "$(GOLINT_INSTALLED)" = "" ]; then \
-		sh scripts/install-golangci-lint.sh -b $(GO_PATH)/bin v1.50.1; \
+		sh scripts/install-golangci-lint.sh -b $(GO_PATH)/bin v1.51.2; \
 	fi;
 
 .PHONY: cleangen
 cleangen:
 	@rm -f $(shell  find ${THIS_DIR} -name '*.gen.go' && find ${THIS_DIR} -name '*.pb.go' && find ${THIS_DIR} -name '*.pb.gw.go')
-
-.PHONY: install-no-plugins
-install-no-plugins: export SKIP_PLUGIN_BUILD=1
-install-no-plugins: install
 
 .PHONY: dev
 dev:
@@ -60,6 +60,10 @@ build: build-ui-ifne
 .PHONY: install
 install: export BOUNDARY_INSTALL_BINARY=1
 install: build
+
+.PHONY: install-no-plugins
+install-no-plugins: export SKIP_PLUGIN_BUILD=1
+install-no-plugins: install
 
 .PHONY: build-memprof
 build-memprof: BUILD_TAGS+=memprofiler
@@ -91,7 +95,6 @@ UI_TARGETS := update-ui-version build-ui build-ui-ifne clean-ui
 $(UI_TARGETS): export UI_CLONE_DIR      := internal/ui/.tmp/boundary-ui
 $(UI_TARGETS): export UI_VERSION_FILE   := internal/ui/VERSION
 $(UI_TARGETS): export UI_DEFAULT_BRANCH := main
-$(UI_TARGETS): export UI_CURRENT_COMMIT := $(shell head -n1 < "$(UI_VERSION_FILE)" | cut -d' ' -f1)
 $(UI_TARGETS): export UI_COMMITISH ?=
 
 .PHONY: update-ui-version
@@ -106,13 +109,11 @@ update-ui-version:
 
 .PHONY: build-ui
 build-ui:
-	@if [ -z "$(UI_COMMITISH)" ]; then \
-		echo "==> Building default UI version from $(UI_VERSION_FILE): $(UI_CURRENT_COMMIT)"; \
-		export UI_COMMITISH="$(UI_CURRENT_COMMIT)"; \
-	else \
-		echo "==> Building custom UI version $(UI_COMMITISH)"; \
-	fi; \
 	./scripts/build-ui.sh
+
+.PHONY: build-plugins
+build-plugins:
+	@CGO_ENABLED=$(CGO_ENABLED) BUILD_TAGS='$(BUILD_TAGS)' sh -c "'$(CURDIR)/scripts/plugins.sh'"
 
 .PHONY: clean-ui
 clean-ui:
@@ -132,7 +133,7 @@ perms-table:
 	@go run internal/website/permstable/permstable.go
 
 .PHONY: gen
-gen: cleangen proto api cli perms-table fmt
+gen: cleangen proto api cli perms-table fmt copywrite
 
 ### oplog requires protoc-gen-go v1.20.0 or later
 # GO111MODULE=on go get -u github.com/golang/protobuf/protoc-gen-go@v1.40
@@ -250,6 +251,10 @@ protolint:
 	cd internal/proto && buf breaking --against 'https://github.com/hashicorp/boundary.git#branch=stable-website,subdir=internal/proto' \
 		--config buf.breaking.wire.yaml
 
+.PHONY: copywrite
+copywrite:
+	copywrite headers
+
 .PHONY: website
 # must have nodejs and npm installed
 website: website-install website-start
@@ -278,7 +283,7 @@ generate-database-dumps:
 test-ci: export CI_BUILD=1
 test-ci:
 	CGO_ENABLED=$(CGO_ENABLED) BUILD_TAGS='$(BUILD_TAGS)' sh -c "'$(CURDIR)/scripts/build.sh'"
-	~/.go/bin/go test ./... -v $(TESTARGS) -json -cover -timeout 120m | tparse -follow
+	go test "$(TEST_PACKAGE)" -tags="$(BUILD_TAGS)" -v $(TESTARGS) -json -cover -timeout 120m | tparse -follow
 
 .PHONY: test-sql
 test-sql:
@@ -286,7 +291,7 @@ test-sql:
 
 .PHONY: test
 test:
-	go test ./... -timeout 30m -json -cover | tparse -follow
+	go test "$(TEST_PACKAGE)" -tags="$(BUILD_TAGS)" $(TESTARGS) -json -cover -timeout $(TEST_TIMEOUT) | tparse -follow
 
 .PHONY: test-sdk
 test-sdk:

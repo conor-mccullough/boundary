@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package worker
 
 import (
@@ -7,7 +10,6 @@ import (
 	"math/rand"
 	"time"
 
-	"github.com/hashicorp/boundary/internal/daemon/cluster"
 	"github.com/hashicorp/boundary/internal/daemon/worker/common"
 	"github.com/hashicorp/boundary/internal/daemon/worker/session"
 	pb "github.com/hashicorp/boundary/internal/gen/controller/servers"
@@ -21,7 +23,9 @@ import (
 
 var firstStatusCheckPostHooks []func(context.Context, *Worker) error
 
-var downstreamWorkersFactory func(ctx context.Context, workerId string) (downstreamers, error)
+var downstreamWorkersFactory func(ctx context.Context, workerId string, ver string) (downstreamers, error)
+
+var checkHCPBUpstreams func(w *Worker) bool
 
 type LastStatusInformation struct {
 	*pbs.StatusResponse
@@ -167,7 +171,7 @@ func (w *Worker) sendWorkerStatus(cancelCtx context.Context, sessionManager sess
 			event.WithInfoMsg("error making status request to controller"))
 	}
 	versionInfo := version.Get()
-	connectedWorkerKeyIds := w.pkiConnManager.Connected()
+	connectionState := w.pkiConnManager.Connected()
 	result, err := client.Status(statusCtx, &pbs.StatusRequest{
 		Jobs: activeJobs,
 		WorkerStatus: &pb.ServerWorkerStatus{
@@ -179,8 +183,10 @@ func (w *Worker) sendWorkerStatus(cancelCtx context.Context, sessionManager sess
 			ReleaseVersion:   versionInfo.FullVersionNumber(false),
 			OperationalState: w.operationalState.Load().(server.OperationalState).String(),
 		},
-		ConnectedWorkerKeyIdentifiers: connectedWorkerKeyIds,
-		UpdateTags:                    w.updateTags.Load(),
+		ConnectedWorkerKeyIdentifiers:         connectionState.AllKeyIds(),
+		ConnectedUnmappedWorkerKeyIdentifiers: connectionState.UnmappedKeyIds(),
+		ConnectedWorkerPublicIds:              connectionState.WorkerIds(),
+		UpdateTags:                            w.updateTags.Load(),
 	})
 	if err != nil {
 		event.WriteError(cancelCtx, op, err, event.WithInfoMsg("error making status request to controller"))
@@ -211,25 +217,26 @@ func (w *Worker) sendWorkerStatus(cancelCtx context.Context, sessionManager sess
 			// append initial upstreams/ cluster addr to the resolver to try
 			if w.GrpcClientConn.GetState() == connectivity.TransientFailure {
 				lastStatus := w.lastStatusSuccess.Load().(*LastStatusInformation)
-				addrs := lastStatus.LastCalculatedUpstreams
+				if lastStatus != nil && lastStatus.LastCalculatedUpstreams != nil {
+					addrs := lastStatus.LastCalculatedUpstreams
 
-				if len(w.conf.RawConfig.Worker.InitialUpstreams) > 0 {
-					addrs = append(addrs, w.conf.RawConfig.Worker.InitialUpstreams...)
-				}
-				if len(w.conf.RawConfig.HcpbClusterId) > 0 {
-					clusterAddress := fmt.Sprintf("%s%s", w.conf.RawConfig.HcpbClusterId, hcpbUrlSuffix)
-					addrs = append(addrs, clusterAddress)
-				}
+					if len(w.conf.RawConfig.Worker.InitialUpstreams) > 0 {
+						addrs = append(addrs, w.conf.RawConfig.Worker.InitialUpstreams...)
+					} else if HandleHcpbClusterId != nil && len(w.conf.RawConfig.HcpbClusterId) > 0 {
+						clusterAddress := HandleHcpbClusterId(w.conf.RawConfig.HcpbClusterId)
+						addrs = append(addrs, clusterAddress)
+					}
 
-				addrs = strutil.RemoveDuplicates(addrs, false)
-				if strutil.EquivalentSlices(lastStatus.LastCalculatedUpstreams, addrs) {
-					// Nothing to update
-					return
-				}
+					addrs = strutil.RemoveDuplicates(addrs, false)
+					if strutil.EquivalentSlices(lastStatus.LastCalculatedUpstreams, addrs) {
+						// Nothing to update
+						return
+					}
 
-				w.updateAddresses(cancelCtx, addrs, addressReceivers)
-				lastStatus.LastCalculatedUpstreams = addrs
-				w.lastStatusSuccess.Store(lastStatus)
+					w.updateAddresses(cancelCtx, addrs, addressReceivers)
+					lastStatus.LastCalculatedUpstreams = addrs
+					w.lastStatusSuccess.Store(lastStatus)
+				}
 			}
 
 			// Exit out of status function; our work here is done and we don't need to create closeConnection requests
@@ -244,8 +251,11 @@ func (w *Worker) sendWorkerStatus(cancelCtx context.Context, sessionManager sess
 
 	w.updateTags.Store(false)
 
-	if authorized := result.GetAuthorizedWorkers(); authorized != nil {
-		cluster.DisconnectUnauthorized(w.pkiConnManager, connectedWorkerKeyIds, authorized.GetWorkerKeyIdentifiers())
+	if authorized := result.GetAuthorizedDownstreamWorkers(); authorized != nil {
+		connectionState.DisconnectMissingWorkers(authorized.GetWorkerPublicIds())
+		connectionState.DisconnectMissingUnmappedKeyIds(authorized.GetUnmappedWorkerKeyIdentifiers())
+	} else if authorized := result.GetAuthorizedWorkers(); authorized != nil {
+		connectionState.DisconnectAllMissingKeyIds(authorized.GetWorkerKeyIdentifiers())
 	}
 	var addrs []string
 	// This may be empty if we are in a multiple hop scenario
@@ -254,7 +264,7 @@ func (w *Worker) sendWorkerStatus(cancelCtx context.Context, sessionManager sess
 		for _, v := range result.CalculatedUpstreams {
 			addrs = append(addrs, v.Address)
 		}
-	} else if w.conf.RawConfig.HcpbClusterId != "" && len(w.conf.RawConfig.Worker.InitialUpstreams) == 0 {
+	} else if checkHCPBUpstreams != nil && checkHCPBUpstreams(w) {
 		// This is a worker that is one hop away from managed workers, so attempt to get that list
 		hcpbWorkersCtx, hcpbWorkersCancel := context.WithTimeout(cancelCtx, time.Duration(w.statusCallTimeoutDuration.Load()))
 		defer hcpbWorkersCancel()
@@ -305,7 +315,7 @@ func (w *Worker) sendWorkerStatus(cancelCtx context.Context, sessionManager sess
 	// If we have post hooks for after the first status check, run them now
 	if w.everAuthenticated.CAS(authenticationStatusFirstAuthentication, authenticationStatusFirstStatusRpcSuccessful) {
 		if downstreamWorkersFactory != nil {
-			w.downstreamWorkers, err = downstreamWorkersFactory(cancelCtx, w.LastStatusSuccess().WorkerId)
+			w.downstreamWorkers, err = downstreamWorkersFactory(cancelCtx, w.LastStatusSuccess().WorkerId, versionInfo.FullVersionNumber(false))
 			if err != nil {
 				event.WriteError(cancelCtx, op, err)
 				w.conf.ServerSideShutdownCh <- struct{}{}
@@ -349,10 +359,10 @@ func (w *Worker) updateAddresses(cancelCtx context.Context, addrs []string, addr
 	}
 
 	// regardless of whether or not it's a new address, we need to set
-	// them for dialingListeners
+	// them for secondary connections
 	for _, as := range *addressReceivers {
 		switch {
-		case as.Type() == dialingListenerReceiverType:
+		case as.Type() == secondaryConnectionReceiverType:
 			tmpAddrs := make([]string, len(addrs))
 			copy(tmpAddrs, addrs)
 			if len(tmpAddrs) == 0 {

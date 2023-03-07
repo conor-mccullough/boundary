@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package common
 
 import (
@@ -7,6 +10,7 @@ import (
 	"github.com/hashicorp/boundary/internal/daemon/controller/handlers"
 	"github.com/hashicorp/boundary/internal/server"
 	pb "github.com/hashicorp/boundary/sdk/pbs/controller/api/resources/targets"
+	"github.com/hashicorp/boundary/version"
 	"github.com/hashicorp/go-bexpr"
 	"github.com/mitchellh/pointerstructure"
 	"google.golang.org/grpc/codes"
@@ -24,11 +28,34 @@ func (w WorkerList) Addresses() []string {
 	return ret
 }
 
+// PublicIds converts the slice of workers to a slice of public ids of those
+// workers.
+func (w WorkerList) PublicIds() []string {
+	ret := make([]string, 0, len(w))
+	for _, worker := range w {
+		ret = append(ret, worker.GetPublicId())
+	}
+	return ret
+}
+
 // workerInfos converts the slice of workers to a slice of their workerInfo protos
 func (w WorkerList) WorkerInfos() []*pb.WorkerInfo {
 	ret := make([]*pb.WorkerInfo, 0, len(w))
 	for _, worker := range w {
 		ret = append(ret, &pb.WorkerInfo{Address: worker.GetAddress()})
+	}
+	return ret
+}
+
+// SupportsFeature returns a new WorkerList composed of all workers in this
+// WorkerList which supports the provided feature.
+func (w WorkerList) SupportsFeature(f version.Feature) WorkerList {
+	var ret []*server.Worker
+	for _, worker := range w {
+		sv := version.FromVersionString(worker.GetReleaseVersion()).Semver()
+		if version.SupportsFeature(sv, f) {
+			ret = append(ret, worker)
+		}
 	}
 	return ret
 }

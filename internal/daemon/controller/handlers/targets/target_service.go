@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package targets
 
 import (
@@ -37,6 +40,7 @@ import (
 	"github.com/hashicorp/boundary/internal/types/subtypes"
 	"github.com/hashicorp/boundary/sdk/pbs/controller/api/resources/scopes"
 	pb "github.com/hashicorp/boundary/sdk/pbs/controller/api/resources/targets"
+	fm "github.com/hashicorp/boundary/version"
 	"github.com/hashicorp/go-bexpr"
 	"github.com/hashicorp/go-secure-stdlib/strutil"
 	"github.com/mr-tron/base58"
@@ -47,9 +51,8 @@ import (
 )
 
 const (
-	credentialDomain  = "credential"
-	hostDomain        = "host"
-	missingPortErrStr = "missing port in address"
+	credentialDomain = "credential"
+	hostDomain       = "host"
 )
 
 // extraWorkerFilterFunc takes in a set of workers and returns another set,
@@ -92,9 +95,10 @@ var (
 		action.List,
 	}
 
+	validateCredentialSourcesFn    = func(context.Context, subtypes.Subtype, []target.CredentialSource) error { return nil }
 	ValidateIngressWorkerFilterFn  = IngressWorkerFilterUnsupported
 	AuthorizeSessionWorkerFilterFn = AuthorizeSessionWithWorkerFilter
-	WorkerFilterDeprecationMessage = "This field is deprecated. Use egress_filter instead."
+	WorkerFilterDeprecationMessage = fmt.Sprintf("This field is deprecated. Use %s instead.", globals.EgressWorkerFilterField)
 )
 
 func IngressWorkerFilterUnsupported(string) error {
@@ -623,9 +627,9 @@ func (s Service) RemoveTargetCredentialSources(ctx context.Context, req *pbs.Rem
 	return &pbs.RemoveTargetCredentialSourcesResponse{Item: item}, nil
 }
 
-// If set, use the worker_filter or egress_worker_filter to filtere the selected workers
+// If set, use the worker_filter or egress_worker_filter to filter the selected workers
 // and ensure we have workers available to service this request.
-func AuthorizeSessionWithWorkerFilter(_ context.Context, t target.Target, selectedWorkers []*server.Worker, _ common.Downstreamers) ([]*server.Worker, error) {
+func AuthorizeSessionWithWorkerFilter(_ context.Context, t target.Target, selectedWorkers wl.WorkerList, _ string, _ common.Downstreamers) (wl.WorkerList, error) {
 	if len(selectedWorkers) > 0 {
 		var eval *bexpr.Evaluator
 		var err error
@@ -641,7 +645,7 @@ func AuthorizeSessionWithWorkerFilter(_ context.Context, t target.Target, select
 			return nil, err
 		}
 
-		selectedWorkers, err = wl.WorkerList(selectedWorkers).Filtered(eval)
+		selectedWorkers, err = selectedWorkers.Filtered(eval)
 		if err != nil {
 			return nil, err
 		}
@@ -699,6 +703,10 @@ func (s Service) AuthorizeSession(ctx context.Context, req *pbs.AuthorizeSession
 		return nil, handlers.ForbiddenError()
 	}
 
+	if t.GetDefaultPort() == 0 {
+		return nil, handlers.ConflictErrorf("Target does not have default port defined.")
+	}
+
 	// Get the target information
 	repo, err := s.repoFn()
 	if err != nil {
@@ -714,6 +722,11 @@ func (s Service) AuthorizeSession(ctx context.Context, req *pbs.AuthorizeSession
 	if t == nil {
 		return nil, handlers.NotFoundErrorf("Target %q not found.", t.GetPublicId())
 	}
+	if len(credSources) > 0 {
+		if err := validateCredentialSourcesFn(ctx, t.GetType(), credSources); err != nil {
+			return nil, err
+		}
+	}
 
 	// Instantiate some repos
 	sessionRepo, err := s.sessionRepoFn()
@@ -725,107 +738,102 @@ func (s Service) AuthorizeSession(ctx context.Context, req *pbs.AuthorizeSession
 		return nil, err
 	}
 
-	// First ensure we can actually service a request, that is, we have workers
-	// available (after any filtering). WorkerInfo only contains the address;
-	// worker IDs below is used to contain their IDs in the same order. This is
-	// used to fetch tags for filtering. But we avoid allocation unless we
-	// actually need it.
-	selectedWorkers, err := serversRepo.ListWorkers(ctx, []string{scope.Global.String()}, server.WithLiveness(time.Duration(s.workerStatusGracePeriod.Load())))
-	if err != nil {
-		return nil, err
-	}
+	p := strconv.FormatUint(uint64(t.GetDefaultPort()), 10)
+	var h, hostId, hostSetId string
 
-	selectedWorkers, err = AuthorizeSessionWorkerFilterFn(ctx, t, selectedWorkers, s.downstreams)
-	if err != nil {
-		return nil, err
-	}
+	switch {
+	case t.GetAddress() != "":
+		h = t.GetAddress()
 
-	// Randomize the workers
-	rand.Shuffle(len(selectedWorkers), func(i, j int) {
-		selectedWorkers[i], selectedWorkers[j] = selectedWorkers[j], selectedWorkers[i]
-	})
+	default:
+		requestedId := req.GetHostId()
+		staticHostRepo, err := s.staticHostRepoFn()
+		if err != nil {
+			return nil, err
+		}
+		pluginHostRepo, err := s.pluginHostRepoFn()
+		if err != nil {
+			return nil, err
+		}
 
-	requestedId := req.GetHostId()
-	staticHostRepo, err := s.staticHostRepoFn()
-	if err != nil {
-		return nil, err
-	}
-	pluginHostRepo, err := s.pluginHostRepoFn()
-	if err != nil {
-		return nil, err
-	}
-
-	var pluginHostSetIds []string
-	var endpoints []*host.Endpoint
-	for _, hSource := range hostSources {
-		hsId := hSource.Id()
-		// FIXME: read in type from DB rather than rely on prefix
-		switch subtypes.SubtypeFromId(hostDomain, hsId) {
-		case static.Subtype:
-			eps, err := staticHostRepo.Endpoints(ctx, hsId)
+		var pluginHostSetIds []string
+		var endpoints []*host.Endpoint
+		for _, hSource := range hostSources {
+			hsId := hSource.Id()
+			switch subtypes.SubtypeFromId(hostDomain, hsId) {
+			case static.Subtype:
+				eps, err := staticHostRepo.Endpoints(ctx, hsId)
+				if err != nil {
+					return nil, err
+				}
+				endpoints = append(endpoints, eps...)
+			default:
+				// Batch the plugin host set ids since each round trip to the plugin
+				// has the potential to be expensive.
+				pluginHostSetIds = append(pluginHostSetIds, hsId)
+			}
+		}
+		if len(pluginHostSetIds) > 0 {
+			eps, err := pluginHostRepo.Endpoints(ctx, pluginHostSetIds)
 			if err != nil {
 				return nil, err
 			}
 			endpoints = append(endpoints, eps...)
-		default:
-			// Batch the plugin host set ids since each round trip to the plugin
-			// has the potential to be expensive.
-			pluginHostSetIds = append(pluginHostSetIds, hsId)
 		}
-	}
-	if len(pluginHostSetIds) > 0 {
-		eps, err := pluginHostRepo.Endpoints(ctx, pluginHostSetIds)
-		if err != nil {
-			return nil, err
+
+		if len(endpoints) == 0 {
+			return nil, handlers.NotFoundErrorf("No host sources or address found for given target.")
 		}
-		endpoints = append(endpoints, eps...)
-	}
 
-	if len(endpoints) == 0 && t.GetAddress() == "" {
-		return nil, handlers.NotFoundErrorf("No host sources or address found for given target.")
-	}
-
-	var chosenEndpoint *host.Endpoint
-	if requestedId != "" {
-		for _, ep := range endpoints {
-			if ep.HostId == requestedId {
-				chosenEndpoint = ep
+		var chosenEndpoint *host.Endpoint
+		if requestedId != "" {
+			for _, ep := range endpoints {
+				if ep.HostId == requestedId {
+					chosenEndpoint = ep
+				}
+			}
+			if chosenEndpoint == nil {
+				// We didn't find it
+				return nil, handlers.InvalidArgumentErrorf(
+					"Errors in provided fields.",
+					map[string]string{
+						"host_id": "The requested host id is not available.",
+					})
 			}
 		}
+
 		if chosenEndpoint == nil {
-			// We didn't find it
-			return nil, handlers.InvalidArgumentErrorf(
-				"Errors in provided fields.",
-				map[string]string{
-					"host_id": "The requested host id is not available.",
-				})
+			chosenEndpoint = endpoints[rand.Intn(len(endpoints))]
 		}
-	}
 
-	var h, p, hostId, hostSetId string
-	if chosenEndpoint == nil && len(endpoints) > 0 {
-		chosenEndpoint = endpoints[rand.Intn(len(endpoints))]
-	}
-
-	if chosenEndpoint != nil {
 		hostId = chosenEndpoint.HostId
 		hostSetId = chosenEndpoint.SetId
-		h, p, err = net.SplitHostPort(chosenEndpoint.Address)
-		switch {
-		case err != nil && strings.Contains(err.Error(), missingPortErrStr):
-			if t.GetDefaultPort() == 0 {
-				return nil, errors.New(ctx, errors.InvalidParameter, op, fmt.Sprintf("neither the selected host %q nor the target provides a port to use", chosenEndpoint.HostId))
-			}
-			h = chosenEndpoint.Address
-			p = strconv.FormatUint(uint64(t.GetDefaultPort()), 10)
-		case err != nil:
-			return nil, errors.Wrap(ctx, err, op, errors.WithMsg("error when parsing the chosen endpoints host address"))
-		}
+		h = chosenEndpoint.Address
 	}
 
-	if t.GetAddress() != "" && hostId == "" && hostSetId == "" {
-		h = t.GetAddress()
-		p = strconv.FormatUint(uint64(t.GetDefaultPort()), 10)
+	if h == "" {
+		return nil, handlers.ApiErrorWithCodeAndMessage(
+			codes.FailedPrecondition,
+			"No host was discovered after checking target address and host sources.")
+	}
+
+	// Ensure we don't have a port from the address, which would be unexpected
+	// FIXME: We've decided to hold off on making this an error until 0.14. In
+	// the meantime, ignore any port coming from the host address.
+	hostWithoutPort, _, err := net.SplitHostPort(h)
+	switch {
+	case err != nil && strings.Contains(err.Error(), globals.MissingPortErrStr):
+		// This is what we expect
+	case err != nil:
+		return nil, errors.Wrap(ctx, err, op, errors.WithMsg("error when parsing the chosen endpoint host address"))
+	case err == nil:
+		h = hostWithoutPort
+		// Use below logic for 0.14:
+		/*
+			return nil, handlers.ApiErrorWithCodeAndMessage(
+				codes.FailedPrecondition,
+				"Address specified for use unexpectedly contains a port.")
+		*/
 	}
 
 	// Generate the endpoint URL
@@ -834,17 +842,21 @@ func (s Service) AuthorizeSession(ctx context.Context, req *pbs.AuthorizeSession
 		Host:   net.JoinHostPort(h, p),
 	}
 
-	for _, extraFilter := range ExtraWorkerFilters {
-		selectedWorkers, err = extraFilter(ctx, selectedWorkers, h, p)
-		if err != nil {
-			return nil, errors.Wrap(ctx, err, op, errors.WithMsg("error executing extra worker filter"))
-		}
-		if len(selectedWorkers) == 0 {
-			return nil, handlers.ApiErrorWithCodeAndMessage(
-				codes.FailedPrecondition,
-				"No workers are available to handle this session, or all have been filtered.")
-		}
+	// Get workers and filter down to ones that can service this request
+	selectedWorkers, err := serversRepo.ListWorkers(ctx, []string{scope.Global.String()}, server.WithLiveness(time.Duration(s.workerStatusGracePeriod.Load())))
+	if err != nil {
+		return nil, err
 	}
+
+	selectedWorkers, err = AuthorizeSessionWorkerFilterFn(ctx, t, selectedWorkers, h, s.downstreams)
+	if err != nil {
+		return nil, err
+	}
+
+	// Randomize the workers
+	rand.Shuffle(len(selectedWorkers), func(i, j int) {
+		selectedWorkers[i], selectedWorkers[j] = selectedWorkers[j], selectedWorkers[i]
+	})
 
 	var vaultReqs []credential.Request
 	var staticIds []string
@@ -979,6 +991,13 @@ func (s Service) AuthorizeSession(ctx context.Context, req *pbs.AuthorizeSession
 		}
 	}
 
+	// this is an edge case issue where the hostId cannot be empty when trying to execute an ssh connection
+	// on a tcp target type. By setting the hostId to the targetId value, this will enable support of previous
+	// boundary cli versions.
+	if fm.SupportsFeature(fm.Binary, fm.UseTargetIdForHostId) && t.GetAddress() != "" {
+		hostId = t.GetPublicId()
+	}
+
 	sad := &pb.SessionAuthorizationData{
 		SessionId:       sess.PublicId,
 		TargetId:        t.GetPublicId(),
@@ -1052,7 +1071,7 @@ func (s Service) createInRepo(ctx context.Context, item *pb.Target) (target.Targ
 		opts = append(opts, target.WithIngressWorkerFilter(item.GetIngressWorkerFilter().GetValue()))
 	}
 	if item.GetAddress() != nil {
-		opts = append(opts, target.WithAddress(item.GetAddress().GetValue()))
+		opts = append(opts, target.WithAddress(strings.TrimSpace(item.GetAddress().GetValue())))
 	}
 
 	attr, err := subtypeRegistry.newAttribute(target.SubtypeFromType(item.GetType()), item.GetAttrs())
@@ -1107,7 +1126,7 @@ func (s Service) updateInRepo(ctx context.Context, scopeId, id string, mask []st
 	}
 	if item.GetAddress() != nil {
 		dbMask = append(dbMask, "Address")
-		opts = append(opts, target.WithAddress(item.GetAddress().GetValue()))
+		opts = append(opts, target.WithAddress(strings.TrimSpace(item.GetAddress().GetValue())))
 	}
 	subtype := target.SubtypeFromId(id)
 
@@ -1567,7 +1586,7 @@ func validateCreateRequest(req *pbs.CreateTargetRequest) error {
 			switch {
 			case err == nil:
 				badFields[globals.AddressField] = "Address does not support a port."
-			case strings.Contains(err.Error(), missingPortErrStr):
+			case strings.Contains(err.Error(), globals.MissingPortErrStr):
 			default:
 				badFields[globals.AddressField] = fmt.Sprintf("Error parsing address: %v.", err)
 			}
@@ -1619,7 +1638,7 @@ func validateUpdateRequest(req *pbs.UpdateTargetRequest) error {
 		}
 		if egressFilter := req.GetItem().GetEgressWorkerFilter(); egressFilter != nil {
 			if workerFilterFound {
-				badFields[globals.EgressWorkerFilterField] = "Cannot set worker_filter and egress_filter; they are mutually exclusive fields."
+				badFields[globals.EgressWorkerFilterField] = fmt.Sprintf("Cannot set %s and %s; they are mutually exclusive fields.", globals.WorkerFilterField, globals.EgressWorkerFilterField)
 			}
 			if _, err := bexpr.CreateEvaluator(egressFilter.GetValue()); err != nil {
 				badFields[globals.EgressWorkerFilterField] = "Unable to successfully parse egress filter expression."
@@ -1627,7 +1646,7 @@ func validateUpdateRequest(req *pbs.UpdateTargetRequest) error {
 		}
 		if ingressFilter := req.GetItem().GetIngressWorkerFilter(); ingressFilter != nil {
 			if workerFilterFound {
-				badFields[globals.IngressWorkerFilterField] = "Cannot set worker_filter and ingress_filter; they are mutually exclusive fields."
+				badFields[globals.IngressWorkerFilterField] = fmt.Sprintf("Cannot set %s and %s; they are mutually exclusive fields.", globals.WorkerFilterField, globals.IngressWorkerFilterField)
 			}
 			err := ValidateIngressWorkerFilterFn(ingressFilter.GetValue())
 			if err != nil {
@@ -1643,7 +1662,7 @@ func validateUpdateRequest(req *pbs.UpdateTargetRequest) error {
 			switch {
 			case err == nil:
 				badFields[globals.AddressField] = "Address does not support a port."
-			case strings.Contains(err.Error(), missingPortErrStr):
+			case strings.Contains(err.Error(), globals.MissingPortErrStr):
 			default:
 				badFields[globals.AddressField] = fmt.Sprintf("Error parsing address: %v.", err)
 			}
@@ -1793,6 +1812,7 @@ func validateAddCredentialSourcesRequest(req *pbs.AddTargetCredentialSourcesRequ
 	for _, cl := range req.GetInjectedApplicationCredentialSourceIds() {
 		if !handlers.ValidId(handlers.Id(cl),
 			vault.CredentialLibraryPrefix,
+			vault.SSHCertificateCredentialLibraryPrefix,
 			credential.UsernamePasswordCredentialPrefix,
 			credential.PreviousUsernamePasswordCredentialPrefix,
 			credential.SshPrivateKeyCredentialPrefix) {
@@ -1840,6 +1860,7 @@ func validateSetCredentialSourcesRequest(req *pbs.SetTargetCredentialSourcesRequ
 	for _, cl := range req.GetInjectedApplicationCredentialSourceIds() {
 		if !handlers.ValidId(handlers.Id(cl),
 			vault.CredentialLibraryPrefix,
+			vault.SSHCertificateCredentialLibraryPrefix,
 			credential.UsernamePasswordCredentialPrefix,
 			credential.PreviousUsernamePasswordCredentialPrefix,
 			credential.SshPrivateKeyCredentialPrefix) {
@@ -1891,6 +1912,7 @@ func validateRemoveCredentialSourcesRequest(req *pbs.RemoveTargetCredentialSourc
 	for _, cl := range req.GetInjectedApplicationCredentialSourceIds() {
 		if !handlers.ValidId(handlers.Id(cl),
 			vault.CredentialLibraryPrefix,
+			vault.SSHCertificateCredentialLibraryPrefix,
 			credential.UsernamePasswordCredentialPrefix,
 			credential.PreviousUsernamePasswordCredentialPrefix,
 			credential.SshPrivateKeyCredentialPrefix,

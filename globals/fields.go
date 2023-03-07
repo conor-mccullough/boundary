@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package globals
 
 const (
@@ -93,4 +96,6 @@ const (
 	KeyVersionIdField                           = "key_version_id"
 	CompletedCountField                         = "completed_count"
 	TotalCountField                             = "total_count"
+	DirectlyConnectedDownstreamWorkersField     = "directly_connected_downstream_workers"
+	AttributesAddressField                      = "attributes.address"
 )

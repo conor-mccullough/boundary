@@ -1,8 +1,12 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package vault
 
 import "github.com/kelseyhightower/envconfig"
 
 type config struct {
+	// VaultAddr is the address that the Vault CLI uses to interact with the running Vault instance
 	VaultAddr  string `envconfig:"VAULT_ADDR" required:"true"` // e.g. "http://127.0.0.1:8200"
 	VaultToken string `envconfig:"VAULT_TOKEN" required:"true"`
 }

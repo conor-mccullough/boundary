@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package proxy
 
 import (
@@ -59,7 +62,4 @@ func TestProxyDialer(t *testing.T) {
 		assert.Equal(t, tcpAddr.IP.String(), d.LastConnectionAddr().Ip())
 		assert.EqualValues(t, tcpAddr.Port, d.LastConnectionAddr().Port())
 	})
-}
-
-func TestProxyDialer_Dial(t *testing.T) {
 }

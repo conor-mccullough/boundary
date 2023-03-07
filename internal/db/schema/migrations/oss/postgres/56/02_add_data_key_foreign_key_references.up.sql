@@ -1,3 +1,6 @@
+-- Copyright (c) HashiCorp, Inc.
+-- SPDX-License-Identifier: MPL-2.0
+
 begin;
 
   alter table auth_token
@@ -32,7 +35,7 @@ begin;
         on update cascade;
 
   -- Replaces trigger from 44/04_session.up.sql
-  -- Replaced in 70/02_sessions.up.sql
+  -- Replaced in 60/02_sessions.up.sql
   -- Adding a foreign key reference to the kms key means we have
   -- to set the key_id to null when the scope_id is set to null,
   -- otherwise we can't delete scopes with sessions, since deleting
@@ -188,6 +191,7 @@ begin;
     'The view returns the current token for the store, if the Vault token has expired this view will return an empty token_hmac and a token_status of ''expired''  '
     'Each row may contain encrypted data. This view should not be used to retrieve data which will be returned external to boundary.';
 
+  -- Replaced in 63/02_add_ssh_cert_to_vault_cred_library_view.up.sql
   create view credential_vault_library_issue_credentials as
   with
     password_override (library_id, username_attribute, password_attribute) as (

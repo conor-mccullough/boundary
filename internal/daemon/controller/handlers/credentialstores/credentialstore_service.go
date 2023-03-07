@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package credentialstores
 
 import (
@@ -32,7 +35,6 @@ import (
 )
 
 const (
-	addressField           = "attributes.address"
 	vaultTokenField        = "attributes.token"
 	vaultTokenHmacField    = "attributes.token_hmac"
 	vaultWorkerFilterField = "attributes.worker_filter"
@@ -793,7 +795,7 @@ func validateCreateRequest(ctx context.Context, req *pbs.CreateCredentialStoreRe
 			}
 
 			if attrs.GetAddress().GetValue() == "" {
-				badFields[addressField] = "Field required for creating a vault credential store."
+				badFields[globals.AttributesAddressField] = "Field required for creating a vault credential store."
 			}
 			if attrs.GetToken().GetValue() == "" {
 				badFields[vaultTokenField] = "Field required for creating a vault credential store."
@@ -842,9 +844,9 @@ func validateUpdateRequest(ctx context.Context, req *pbs.UpdateCredentialStoreRe
 			}
 			attrs := req.GetItem().GetVaultCredentialStoreAttributes()
 			if attrs != nil {
-				if handlers.MaskContains(req.GetUpdateMask().GetPaths(), addressField) &&
+				if handlers.MaskContains(req.GetUpdateMask().GetPaths(), globals.AttributesAddressField) &&
 					attrs.GetAddress().GetValue() == "" {
-					badFields[addressField] = "This is a required field and cannot be unset."
+					badFields[globals.AttributesAddressField] = "This is a required field and cannot be unset."
 				}
 				if handlers.MaskContains(req.GetUpdateMask().GetPaths(), vaultTokenField) &&
 					attrs.GetToken().GetValue() == "" {

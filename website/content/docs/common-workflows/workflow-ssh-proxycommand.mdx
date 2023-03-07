@@ -33,15 +33,16 @@ the local Boundary proxy in a wrapped netcat session, passing in the target ID a
 ## Authenticate to Boundary
 
 Before `ssh` can invoke `boundary connect` you need to authenticate. In this example, we're using `boundary dev` with the
-default username (admin) and password (password):
+default username (admin) and password (password), and because this auth method is the primary that resides in the global 
+scope, we can use the short form of the authenticate command with no extra flags:
 
 ```bash
-$ boundary authenticate password -login-name=admin -auth-method-id=ampw_1234567890
+$ boundary authenticate
 ```
 
 ## SSH to Target
 
-Running Boundary in [dev mode](/docs/oss/installing/dev-mode) creates other
+Running Boundary in [dev mode](/boundary/docs/oss/installing/dev-mode) creates other
 default resources such as a target and auth method. The default target (ttcp_1234567890) is already setup with a host
 at `localhost` and a default port of `22`.
 
@@ -117,12 +118,12 @@ Before `ssh` can invoke `boundary connect` you need to authenticate. In this exa
 default username (admin) and password (password):
 
 ```bash
-$ boundary authenticate password -login-name=admin -auth-method-id=ampw_1234567890
+$ boundary authenticate
 ```
 
 ## Authorize the Session
 
-Running Boundary in [dev mode](/docs/oss/installing/dev-mode) creates other
+Running Boundary in [dev mode](/boundary/docs/oss/installing/dev-mode) creates other
 default resources such as a target and auth method. The default target (ttcp_1234567890) is already setup with a host
 at `localhost` and a default port of `22`.
 

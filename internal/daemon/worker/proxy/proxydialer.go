@@ -1,7 +1,11 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package proxy
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"sync/atomic"
 
@@ -20,10 +24,14 @@ func directDialer(ctx context.Context, endpoint string, _ string, _ proto.Messag
 	if len(endpoint) == 0 {
 		return nil, errors.New(ctx, errors.InvalidParameter, op, "endpoint is empty")
 	}
-	d, err := NewProxyDialer(ctx, func(...Option) (net.Conn, error) {
+	d, err := NewProxyDialer(ctx, func(opt ...Option) (net.Conn, error) {
 		remoteConn, err := net.Dial("tcp", endpoint)
 		if err != nil {
 			return nil, errors.Wrap(ctx, err, op)
+		}
+		opts := GetOpts(opt...)
+		if opts.WithPostConnectionHook != nil {
+			opts.WithPostConnectionHook(remoteConn)
 		}
 		return remoteConn, nil
 	})
@@ -86,22 +94,25 @@ type portAndIpGetter interface {
 // Dial uses the provided dial function to get a net.Conn and record its
 // net.Addr information.  The returned net.Addr should contain the information
 // for the endpoint that is being proxied to.
+// All provided options (for example WithPostConnectionHook) are passed into the
+// dial function associated with this ProxyDialer.
 func (d *ProxyDialer) Dial(ctx context.Context, opt ...Option) (net.Conn, error) {
 	const op = "proxy.(*ProxyDialer).Dial"
 	c, err := d.dialFn(opt...)
 	if err != nil {
 		return nil, err
 	}
-	switch v := c.RemoteAddr().(type) {
-	case *net.TCPAddr:
-		ip := v.IP.String()
-		port := uint32(v.Port)
+	switch v := c.(type) {
+	case *net.TCPConn:
+		addr := v.RemoteAddr().(*net.TCPAddr)
+		ip := addr.IP.String()
+		port := uint32(addr.Port)
 		d.latestAddr.Store(&proxyAddr{ip: ip, port: port})
 	case portAndIpGetter:
 		d.latestAddr.Store(&proxyAddr{ip: v.GetIp(), port: v.GetPort()})
 	default:
 		c.Close()
-		return nil, errors.New(ctx, errors.Internal, op, "connection type unexpected")
+		return nil, errors.New(ctx, errors.Internal, op, fmt.Sprintf("connection type unexpected %T", v))
 	}
 	return c, nil
 }

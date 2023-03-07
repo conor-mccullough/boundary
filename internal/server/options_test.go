@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package server
 
 import (
@@ -221,6 +224,14 @@ func Test_GetOpts(t *testing.T) {
 		opts := GetOpts(WithDirectlyConnected(true))
 		testOpts := getDefaultOptions()
 		testOpts.withDirectlyConnected = true
+		opts.withNewIdFunc = nil
+		testOpts.withNewIdFunc = nil
+		assert.Equal(t, opts, testOpts)
+	})
+	t.Run("WithWorkerPool", func(t *testing.T) {
+		opts := GetOpts(WithWorkerPool([]string{"1", "2", "3"}))
+		testOpts := getDefaultOptions()
+		testOpts.withWorkerPool = []string{"1", "2", "3"}
 		opts.withNewIdFunc = nil
 		testOpts.withNewIdFunc = nil
 		assert.Equal(t, opts, testOpts)

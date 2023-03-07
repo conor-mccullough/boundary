@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package base
 
 import (
@@ -423,7 +426,6 @@ func TestServer_AddEventerToContext(t *testing.T) {
 }
 
 func TestSetupWorkerPublicAddress(t *testing.T) {
-	t.Parallel()
 	tests := []struct {
 		name             string
 		inputConfig      *config.Config

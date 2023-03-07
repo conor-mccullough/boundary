@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package server
 
 import (
@@ -80,9 +83,7 @@ where
 `
 
 func TestReloadControllerDatabase(t *testing.T) {
-	td, err := os.MkdirTemp("", "boundary-test-")
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, os.RemoveAll(td)) })
+	td := t.TempDir()
 
 	// Set the close time to something small
 	db.CloseSwappedDbDuration = 5 * time.Second
@@ -220,9 +221,7 @@ func TestReloadControllerDatabase(t *testing.T) {
 }
 
 func TestReloadControllerDatabase_InvalidNewDatabaseState(t *testing.T) {
-	td, err := os.MkdirTemp("", "boundary-test-")
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, os.RemoveAll(td)) })
+	td := t.TempDir()
 
 	// Create and migrate database A and B.
 	controllerKey := config.DevKeyGeneration()

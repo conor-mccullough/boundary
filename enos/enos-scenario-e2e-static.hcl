@@ -1,3 +1,6 @@
+# Copyright (c) HashiCorp, Inc.
+# SPDX-License-Identifier: MPL-2.0
+
 scenario "e2e_static" {
   terraform_cli = terraform_cli.default
   terraform     = terraform.default
@@ -50,6 +53,9 @@ scenario "e2e_static" {
 
   step "create_base_infra" {
     module = module.infra
+    depends_on = [
+      step.find_azs,
+    ]
 
     variables {
       availability_zones = step.find_azs.availability_zones
@@ -61,6 +67,7 @@ scenario "e2e_static" {
     module = module.boundary
     depends_on = [
       step.create_base_infra,
+      step.create_db_password,
       step.build_boundary
     ]
 
@@ -102,6 +109,7 @@ scenario "e2e_static" {
 
     variables {
       test_package             = "github.com/hashicorp/boundary/testing/internal/e2e/tests/static"
+      debug_no_run             = var.e2e_debug_no_run
       alb_boundary_api_addr    = step.create_boundary_cluster.alb_boundary_api_addr
       auth_method_id           = step.create_boundary_cluster.auth_method_id
       auth_login_name          = step.create_boundary_cluster.auth_login_name
@@ -110,6 +118,7 @@ scenario "e2e_static" {
       aws_ssh_private_key_path = local.aws_ssh_private_key_path
       target_ip                = step.create_target.target_ips[0]
       target_user              = "ubuntu"
+      target_port              = "22"
     }
   }
 

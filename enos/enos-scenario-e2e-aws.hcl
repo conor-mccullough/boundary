@@ -1,3 +1,6 @@
+# Copyright (c) HashiCorp, Inc.
+# SPDX-License-Identifier: MPL-2.0
+
 # This scenario requires access to the boundary team's test AWS account
 scenario "e2e_aws" {
   terraform_cli = terraform_cli.default
@@ -51,6 +54,9 @@ scenario "e2e_aws" {
 
   step "create_base_infra" {
     module = module.infra
+    depends_on = [
+      step.find_azs,
+    ]
 
     variables {
       availability_zones = step.find_azs.availability_zones
@@ -62,6 +68,7 @@ scenario "e2e_aws" {
     module = module.boundary
     depends_on = [
       step.create_base_infra,
+      step.create_db_password,
       step.build_boundary
     ]
 
@@ -169,6 +176,7 @@ scenario "e2e_aws" {
 
     variables {
       test_package             = "github.com/hashicorp/boundary/testing/internal/e2e/tests/aws"
+      debug_no_run             = var.e2e_debug_no_run
       alb_boundary_api_addr    = step.create_boundary_cluster.alb_boundary_api_addr
       auth_method_id           = step.create_boundary_cluster.auth_method_id
       auth_login_name          = step.create_boundary_cluster.auth_login_name
@@ -176,6 +184,7 @@ scenario "e2e_aws" {
       local_boundary_dir       = local.local_boundary_dir
       aws_ssh_private_key_path = local.aws_ssh_private_key_path
       target_user              = "ubuntu"
+      target_port              = "22"
       aws_access_key_id        = step.iam_setup.access_key_id
       aws_secret_access_key    = step.iam_setup.secret_access_key
       aws_host_set_filter1     = step.create_tag1_inputs.tag_string

@@ -1,13 +1,12 @@
+# Copyright (c) HashiCorp, Inc.
+# SPDX-License-Identifier: MPL-2.0
+
 module "az_finder" {
   source = "./modules/az_finder"
 }
 
 module "bats_deps" {
   source = "./modules/bats_deps"
-}
-
-module "binary_finder" {
-  source = "./modules/binary_finder"
 }
 
 module "boundary" {
@@ -87,12 +86,12 @@ module "vault" {
   ssh_aws_keypair = var.aws_ssh_keypair_name
 }
 
-module "test_cli_ui" {
-  source = "./modules/test_cli_ui"
-}
-
 module "test_e2e" {
   source = "./modules/test_e2e"
+}
+
+module "test_e2e_ui" {
+  source = "./modules/test_e2e_ui"
 }
 
 module "test_smoke" {

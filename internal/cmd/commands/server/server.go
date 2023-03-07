@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package server
 
 import (
@@ -37,6 +40,8 @@ var (
 	_ cli.Command             = (*Command)(nil)
 	_ cli.CommandAutocomplete = (*Command)(nil)
 )
+
+var extraSelfTerminationConditionFuncs []func(context.Context, chan struct{})
 
 type Command struct {
 	*base.Server
@@ -208,6 +213,12 @@ func (c *Command) Run(args []string) int {
 				return base.CommandUserError
 			}
 		}
+		if c.Config.Controller != nil {
+			if c.Config.Worker.Name == c.Config.Controller.Name {
+				c.UI.Error("Controller and worker cannot be configured with the same name.")
+				return base.CommandUserError
+			}
+		}
 	}
 
 	if c.Config.DefaultMaxRequestDuration != 0 {
@@ -305,7 +316,7 @@ func (c *Command) Run(args []string) int {
 		for _, upstream := range c.Config.Worker.InitialUpstreams {
 			host, _, err := net.SplitHostPort(upstream)
 			if err != nil {
-				if strings.Contains(err.Error(), "missing port in address") {
+				if strings.Contains(err.Error(), globals.MissingPortErrStr) {
 					host = upstream
 				} else {
 					c.UI.Error(fmt.Errorf("Invalid worker upstream address %q: %w", upstream, err).Error())
@@ -329,9 +340,17 @@ func (c *Command) Run(args []string) int {
 		}
 
 		if c.Config.HcpbClusterId != "" {
-			_, err := uuid.ParseUUID(c.Config.HcpbClusterId)
+			if len(c.Config.Worker.InitialUpstreams) > 0 {
+				c.UI.Error(fmt.Errorf("Initial upstreams and HCPB cluster ID are mutually exclusive fields").Error())
+				return base.CommandUserError
+			}
+			clusterId := c.Config.HcpbClusterId
+			if strings.HasPrefix(clusterId, "int-") {
+				clusterId = strings.TrimPrefix(clusterId, "int-")
+			}
+			_, err := uuid.ParseUUID(clusterId)
 			if err != nil {
-				c.UI.Error(fmt.Errorf("Invalid HCP Boundary cluster id %q: %w", c.Config.HcpbClusterId, err).Error())
+				c.UI.Error(fmt.Errorf("Invalid HCP Boundary cluster ID %q: %w", clusterId, err).Error())
 				return base.CommandUserError
 			}
 		}
@@ -349,7 +368,7 @@ func (c *Command) Run(args []string) int {
 				}
 				host, _, err := net.SplitHostPort(ln.Address)
 				if err != nil {
-					if strings.Contains(err.Error(), "missing port in address") {
+					if strings.Contains(err.Error(), globals.MissingPortErrStr) {
 						host = ln.Address
 					} else {
 						c.UI.Error(fmt.Errorf("Invalid cluster listener address %q: %w", ln.Address, err).Error())
@@ -678,6 +697,10 @@ func (c *Command) WaitForInterrupt() int {
 			c.UI.Error("Forcing shutdown")
 			os.Exit(base.CommandCliError)
 		}
+	}
+
+	for _, f := range extraSelfTerminationConditionFuncs {
+		f(c.Context, c.ServerSideShutdownCh)
 	}
 
 	for !shutdownCompleted.Load() {

@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package worker
 
 import (
@@ -29,12 +32,24 @@ import (
 	"google.golang.org/grpc"
 )
 
-// the function that handles a secondary connection over a provided listener
-var handleSecondaryConnection = closeListener
+const (
+	// the purpose strings used to identify listeners
+	reverseGrpcListenerPurpose            = "reverse-grpc"
+	multihopProxyDataplaneListenerPurpose = "multihop-proxy-dataplane"
+	grpcListenerPurpose                   = "grpc"
+)
 
-func closeListener(_ context.Context, l net.Listener, _ any, _ int) error {
+// the function that handles a secondary connection over a provided listener
+var handleSecondaryConnection = closeListeners
+
+// closeListeners handles the secondary connection listeners by closing them.
+// l is the grpc listener and l2 is the data plane listener.
+func closeListeners(_ context.Context, l, l2 net.Listener, _ any) error {
 	if l != nil {
-		return l.Close()
+		l.Close()
+	}
+	if l2 != nil {
+		l2.Close()
 	}
 	return nil
 }
@@ -154,7 +169,7 @@ func (w *Worker) configureForWorker(ln *base.ServerListener, logger *log.Logger,
 	// This handles connections coming in that are authenticated via
 	// nodeenrollment but not with any extra purpose; these are normal PKI
 	// worker connections
-	nodeeAuthListener, err := w.workerAuthSplitListener.GetListener(nodeenet.AuthenticatedNonSpecificNextProto)
+	nodeeAuthListener, err := w.workerAuthSplitListener.GetListener(nodeenet.AuthenticatedNonSpecificNextProto, nodee.WithNativeConns(true))
 	if err != nil {
 		return nil, fmt.Errorf("error instantiating worker split listener: %w", err)
 	}
@@ -168,16 +183,30 @@ func (w *Worker) configureForWorker(ln *base.ServerListener, logger *log.Logger,
 
 	// Connections coming in here are authed by nodeenrollment and are for the
 	// reverse grpc purpose
-	reverseGrpcListener, err := w.workerAuthSplitListener.GetListener(common.ReverseGrpcConnectionAlpnValue)
+	reverseGrpcListener, err := w.workerAuthSplitListener.GetListener(common.ReverseGrpcConnectionAlpnValue, nodee.WithNativeConns(true))
 	if err != nil {
-		return nil, fmt.Errorf("error instantiating non-worker split listener: %w", err)
+		return nil, fmt.Errorf("error instantiating reverse grpc split listener: %w", err)
 	}
 
 	// This wraps the reverse grpc pki worker connections with a listener which
 	// adds the worker key id of the connections to the worker's pkiConnManager.
-	revPkiWorkerTrackingListener, err := cluster.NewTrackingListener(w.baseContext, reverseGrpcListener, w.pkiConnManager)
+	revPkiWorkerTrackingListener, err := cluster.NewTrackingListener(w.baseContext, reverseGrpcListener, w.pkiConnManager, sourcePurpose(reverseGrpcListenerPurpose))
 	if err != nil {
 		return nil, fmt.Errorf("%s: error creating reverse grpc pki worker tracking listener: %w", op, err)
+	}
+
+	// Connections coming in here are authed by nodeenrollment and are for the
+	// multi-hop session-proxying
+	dataPlaneProxyListener, err := w.workerAuthSplitListener.GetListener(common.DataPlaneProxyAlpnValue, nodee.WithNativeConns(true))
+	if err != nil {
+		return nil, fmt.Errorf("error instantiating websocket proxying split listener: %w", err)
+	}
+
+	// This wraps the web socket proxying worker connections with a listener which
+	// adds the worker key id of the connections to the worker's pkiConnManager.
+	dataPlaneProxyTrackingListener, err := cluster.NewTrackingListener(w.baseContext, dataPlaneProxyListener, w.pkiConnManager, sourcePurpose(multihopProxyDataplaneListenerPurpose))
+	if err != nil {
+		return nil, fmt.Errorf("%s: error creating web socket proxying tracking listener: %w", op, err)
 	}
 
 	statsHandler, err := metric.InstrumentClusterStatsHandler(w.baseContext)
@@ -201,23 +230,19 @@ func (w *Worker) configureForWorker(ln *base.ServerListener, logger *log.Logger,
 
 	ln.GrpcServer = downstreamServer
 
-	eventingListener, err := common.NewEventingListener(cancelCtx, nodeeAuthListener)
-	if err != nil {
-		return nil, fmt.Errorf("%s: error creating eventing listener: %w", op, err)
-	}
-
 	// This wraps the normal pki worker connections with a listener which adds
 	// the worker key id of the  connections to the worker's pkiConnManager.
-	pkiWorkerTrackingListener, err := cluster.NewTrackingListener(cancelCtx, eventingListener, w.pkiConnManager)
+	pkiWorkerTrackingListener, err := cluster.NewTrackingListener(cancelCtx, nodeeAuthListener, w.pkiConnManager, sourcePurpose(grpcListenerPurpose))
 	if err != nil {
 		return nil, fmt.Errorf("%s: error creating pki worker tracking listener: %w", op, err)
 	}
 
 	return func() {
+		handleSecondaryConnection(cancelCtx, metric.InstrumentWorkerClusterTrackingListener(revPkiWorkerTrackingListener, reverseGrpcListenerPurpose),
+			metric.InstrumentWorkerClusterTrackingListener(dataPlaneProxyTrackingListener, multihopProxyDataplaneListenerPurpose), w.downstreamReceiver)
 		go w.workerAuthSplitListener.Start()
 		go httpServer.Serve(proxyListener)
-		go ln.GrpcServer.Serve(metric.InstrumentWorkerClusterTrackingListener(pkiWorkerTrackingListener, "grpc"))
-		go handleSecondaryConnection(cancelCtx, metric.InstrumentWorkerClusterTrackingListener(revPkiWorkerTrackingListener, "reverse-grpc"), w.downstreamRoutes, -1)
+		go ln.GrpcServer.Serve(metric.InstrumentWorkerClusterTrackingListener(pkiWorkerTrackingListener, grpcListenerPurpose))
 	}, nil
 }
 
@@ -297,4 +322,8 @@ func listenerCloseErrorCheck(lnType string, err error) error {
 	}
 
 	return err
+}
+
+func sourcePurpose(purpose string) string {
+	return fmt.Sprintf("worker %s", purpose)
 }

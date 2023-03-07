@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package aws_test
 
 import "github.com/kelseyhightower/envconfig"
@@ -11,7 +14,7 @@ type config struct {
 	AwsHostSetIps2     string `envconfig:"E2E_AWS_HOST_SET_IPS2" required:"true"`    // e.g. "[\"1.2.3.4\"]"
 	TargetSshKeyPath   string `envconfig:"E2E_SSH_KEY_PATH" required:"true"`         // e.g. "/Users/username/key.pem"
 	TargetSshUser      string `envconfig:"E2E_SSH_USER" required:"true"`             // e.g. "ubuntu"
-	TargetPort         string `envconfig:"E2E_SSH_PORT" default:"22"`
+	TargetPort         string `envconfig:"E2E_SSH_PORT" required:"true"`
 }
 
 func loadConfig() (*config, error) {

@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package controller
 
 import (
@@ -77,7 +80,7 @@ func createMuxWithEndpoints(c *Controller, props HandlerProperties) (http.Handle
 		return p == uiPath
 	}
 
-	return http.HandlerFunc(mux.ServeHTTP), isUiRequest, nil
+	return mux, isUiRequest, nil
 }
 
 // apiHandler returns an http.Handler for the services. This can be used on
@@ -247,7 +250,8 @@ func (c *Controller) registerGrpcServices(s *grpc.Server) error {
 		services.RegisterCredentialLibraryServiceServer(s, cl)
 	}
 	if _, ok := currentServices[services.WorkerService_ServiceDesc.ServiceName]; !ok {
-		ws, err := workers.NewService(c.baseContext, c.ServersRepoFn, c.IamRepoFn, c.WorkerAuthRepoStorageFn)
+		ws, err := workers.NewService(c.baseContext, c.ServersRepoFn, c.IamRepoFn, c.WorkerAuthRepoStorageFn,
+			c.downstreamWorkers)
 		if err != nil {
 			return fmt.Errorf("failed to create worker handler service: %w", err)
 		}

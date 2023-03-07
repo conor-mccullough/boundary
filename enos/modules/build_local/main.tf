@@ -1,3 +1,6 @@
+# Copyright (c) HashiCorp, Inc.
+# SPDX-License-Identifier: MPL-2.0
+
 terraform {
   required_providers {
     enos = {
@@ -14,6 +17,10 @@ variable "build_target" {
   default = "build-ui build"
 }
 
+variable "edition" {
+  default = "oss"
+}
+
 resource "enos_local_exec" "build" {
   environment = {
     "GOOS"          = "linux",
@@ -21,6 +28,7 @@ resource "enos_local_exec" "build" {
     "CGO_ENABLED"   = 0,
     "ARTIFACT_PATH" = var.path
     "BUILD_TARGET"  = var.build_target
+    "EDITION"       = var.edition
   }
   scripts = ["${path.module}/templates/build.sh"]
 }

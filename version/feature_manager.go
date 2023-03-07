@@ -1,20 +1,13 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package version
 
 import (
-	"strings"
-
 	gvers "github.com/hashicorp/go-version"
 )
 
-type Metadata int
-
-const (
-	OSS Metadata = iota
-	HCP
-)
-
 type MetadataConstraint struct {
-	MetaInfo    []Metadata
 	Constraints gvers.Constraints
 }
 
@@ -23,55 +16,80 @@ type Feature int
 const (
 	UnknownFeature Feature = iota
 	MultiHopSessionFeature
+	IncludeStatusInCli
+	CredentialLibraryVaultSubtype
+	UseTargetIdForHostId
+	RequireVersionInWorkerInfo
 )
 
 var featureMap map[Feature]MetadataConstraint
 
+// Binary is the version of the running binary.
+// This can be used for feature checks.
+var Binary *gvers.Version
+
 func init() {
+	// Do this early to ensure version is valid, if this panics something is
+	// very broken with the version and any version checks based on the binary's
+	// version info will not work correctly. Also do this once since the version
+	// can't change while running.
+	var err error
+	Binary, err = GetReleaseVersion()
+	if err != nil {
+		panic(err)
+	}
+
 	if featureMap == nil {
 		featureMap = make(map[Feature]MetadataConstraint)
 	}
 	/*
 		Add constraints here following this format after adding a Feature to the Feature iota:
-		featureConstraint, err := gvers.NewConstraint(">= 0.1.0") // This feature exists at 0.1.0 and above
 		featureMap[FEATURE] = MetadataConstraint{
 			MetaInfo:    []Metadata{OSS, HCP},
-			Constraints: featureConstraint,
+			Constraints: mustNewConstraints(">= 0.1.0"), // This feature exists at 0.1.0 and above
 		}
 	*/
-}
-
-func metadataStringToMetadata(m string) Metadata {
-	if strings.Contains(strings.ToLower(m), "hcp") {
-		return HCP
+	featureMap[IncludeStatusInCli] = MetadataConstraint{
+		Constraints: mustNewConstraints("< 0.14.0"),
+	}
+	featureMap[CredentialLibraryVaultSubtype] = MetadataConstraint{
+		Constraints: mustNewConstraints("< 0.14.0"),
 	}
 
-	return OSS
+	// UseTargetIdForHostId supports old CLI clients that are unaware of host-sourceless targets,
+	// this feature populates the target's public id into the AuthorizeSessionResponse
+	// and the SessionAuthroizationData so the CLI can properly build the ssh command
+	// when calling "boundary connect ssh..."
+	featureMap[UseTargetIdForHostId] = MetadataConstraint{
+		Constraints: mustNewConstraints("< 0.14.0"),
+	}
+	// RequireVersionInWorkerInfo allows us to take action on various workers
+	// based on their version, e.g. to prevent incompatibilities
+	featureMap[RequireVersionInWorkerInfo] = MetadataConstraint{
+		Constraints: mustNewConstraints(">= 0.13.0"),
+	}
 }
 
-// Check returns a bool indicating if a version meets the metadata constraint
+func mustNewConstraints(v string) gvers.Constraints {
+	c, err := gvers.NewConstraint(v)
+	if err != nil {
+		panic(err)
+	}
+	return c
+}
+
+// Check returns a bool indicating if a version meets the constraints
 // for a feature. Check returns false if version is nil.
 func (m MetadataConstraint) Check(version *gvers.Version) bool {
 	if version == nil {
 		return false
 	}
-	binaryMeta := metadataStringToMetadata(version.Metadata())
-
-	for _, v := range m.MetaInfo {
-		if v == binaryMeta {
-			return true
-		}
-	}
-	return false
+	return m.Constraints.Check(version)
 }
 
 // Check returns a bool indicating if a version satisfies the feature constraints
 func Check(binaryVersion *gvers.Version, featureConstraint MetadataConstraint) bool {
-	if !featureConstraint.Check(binaryVersion) {
-		return false
-	}
-
-	return featureConstraint.Constraints.Check(binaryVersion)
+	return featureConstraint.Check(binaryVersion)
 }
 
 // SupportsFeature return a bool indicating whether or not this version supports the given feature

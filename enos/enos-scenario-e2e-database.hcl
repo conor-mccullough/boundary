@@ -1,3 +1,6 @@
+# Copyright (c) HashiCorp, Inc.
+# SPDX-License-Identifier: MPL-2.0
+
 scenario "e2e_database" {
   terraform_cli = terraform_cli.default
   terraform     = terraform.default
@@ -29,6 +32,9 @@ scenario "e2e_database" {
 
   step "create_base_infra" {
     module = module.infra
+    depends_on = [
+      step.find_azs,
+    ]
 
     variables {
       availability_zones = step.find_azs.availability_zones
@@ -85,45 +91,22 @@ scenario "e2e_database" {
     }
   }
 
-  step "create_vault_cluster" {
-    module = module.vault
-    depends_on = [
-      step.create_base_infra,
-    ]
-
-    variables {
-      ami_id          = step.create_base_infra.ami_ids["ubuntu"]["amd64"]
-      instance_type   = var.vault_instance_type
-      instance_count  = 1
-      kms_key_arn     = step.create_base_infra.kms_key_arn
-      storage_backend = "raft"
-      unseal_method   = "awskms"
-      vault_release = {
-        version = var.vault_version
-        edition = "oss"
-      }
-      vpc_id = step.create_base_infra.vpc_id
-    }
-  }
-
   step "run_e2e_test" {
     module = module.test_e2e
     depends_on = [
       step.create_targets_with_tag,
       step.iam_setup,
-      step.create_vault_cluster,
     ]
 
     variables {
       test_package             = "github.com/hashicorp/boundary/testing/internal/e2e/tests/database"
+      debug_no_run             = var.e2e_debug_no_run
       local_boundary_dir       = local.local_boundary_dir
       target_user              = "ubuntu"
       aws_ssh_private_key_path = local.aws_ssh_private_key_path
       aws_access_key_id        = step.iam_setup.access_key_id
       aws_secret_access_key    = step.iam_setup.secret_access_key
       aws_host_set_filter1     = step.create_tag_inputs.tag_string
-      vault_addr               = step.create_vault_cluster.instance_public_ips[0]
-      vault_root_token         = step.create_vault_cluster.vault_root_token
     }
   }
 

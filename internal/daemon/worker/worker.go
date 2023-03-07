@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package worker
 
 import (
@@ -19,6 +22,7 @@ import (
 	"github.com/hashicorp/boundary/internal/daemon/cluster"
 	"github.com/hashicorp/boundary/internal/daemon/worker/common"
 	"github.com/hashicorp/boundary/internal/daemon/worker/internal/metric"
+	"github.com/hashicorp/boundary/internal/daemon/worker/proxy"
 	"github.com/hashicorp/boundary/internal/daemon/worker/session"
 	"github.com/hashicorp/boundary/internal/errors"
 	pb "github.com/hashicorp/boundary/internal/gen/controller/servers"
@@ -43,17 +47,17 @@ import (
 
 type randFn func(length int) (string, error)
 
-// downstreamRouter defines a min interface which must be met by a
-// Worker.downstreamRoutes field
-type downstreamRouter interface {
-	// StartRouteMgmtTicking starts a ticker which manages the router's
+// reverseConnReceiver defines a min interface which must be met by a
+// Worker.downstreamReceiver field
+type reverseConnReceiver interface {
+	// StartConnectionMgmtTicking starts a ticker which manages the receiver's
 	// connections.
-	StartRouteMgmtTicking(context.Context, func() string, int) error
+	StartConnectionMgmtTicking(context.Context, func() string, int) error
 
-	// ProcessPendingConnections starts a function that continually processes
-	// incoming client connections. This only returns when the provided context
+	// StartProcessingPendingConnections is a function that continually
+	// processes incoming connections. This only returns when the provided context
 	// is done.
-	StartProcessingPendingConnections(context.Context, func() string)
+	StartProcessingPendingConnections(context.Context, func() string) error
 }
 
 // downstreamers provides at least a minimum interface that must be met by a
@@ -64,9 +68,9 @@ type downstreamers interface {
 	RootId() string
 }
 
-// downstreamRouterFactory provides a simple factory which a Worker can use to
-// create its downstreamRouter
-var downstreamRouterFactory func() downstreamRouter
+// reverseConnReceiverFactory provides a simple factory which a Worker can use to
+// create its reverseConnReceiver
+var reverseConnReceiverFactory func() reverseConnReceiver
 
 var initializeReverseGrpcClientCollectors = noopInitializePromCollectors
 
@@ -126,8 +130,8 @@ type Worker struct {
 	workerAuthSplitListener       *nodeenet.SplitListener
 
 	// downstream workers and routes to those workers
-	downstreamWorkers downstreamers
-	downstreamRoutes  downstreamRouter
+	downstreamWorkers  downstreamers
+	downstreamReceiver reverseConnReceiver
 
 	// Timing variables. These are atomics for SIGHUP support, and are int64
 	// because they are casted to time.Duration.
@@ -169,8 +173,8 @@ func New(conf *Config) (*Worker, error) {
 		statusCallTimeoutDuration:   new(atomic.Int64),
 	}
 
-	if downstreamRouterFactory != nil {
-		w.downstreamRoutes = downstreamRouterFactory()
+	if reverseConnReceiverFactory != nil {
+		w.downstreamReceiver = reverseConnReceiverFactory()
 	}
 
 	w.lastStatusSuccess.Store((*LastStatusInformation)(nil))
@@ -436,7 +440,7 @@ func (w *Worker) Start() error {
 		w.startAuthRotationTicking(w.baseContext)
 	}()
 
-	if w.downstreamRoutes != nil {
+	if w.downstreamReceiver != nil {
 		w.tickerWg.Add(2)
 		servNameFn := func() string {
 			if s := w.LastStatusSuccess(); s != nil {
@@ -446,11 +450,13 @@ func (w *Worker) Start() error {
 		}
 		go func() {
 			defer w.tickerWg.Done()
-			w.downstreamRoutes.StartProcessingPendingConnections(w.baseContext, servNameFn)
+			if err := w.downstreamReceiver.StartProcessingPendingConnections(w.baseContext, servNameFn); err != nil {
+				errors.Wrap(w.baseContext, err, op)
+			}
 		}()
 		go func() {
 			defer w.tickerWg.Done()
-			err := w.downstreamRoutes.StartRouteMgmtTicking(
+			err := w.downstreamReceiver.StartConnectionMgmtTicking(
 				w.baseContext,
 				servNameFn,
 				-1, // indicates the ticker should run until cancelled.
@@ -467,31 +473,30 @@ func (w *Worker) Start() error {
 	return nil
 }
 
-func (w *Worker) hasActiveConnection() bool {
-	activeConnection := false
-	w.sessionManager.ForEachLocalSession(
-		func(s session.Session) bool {
-			conns := s.GetLocalConnections()
-			for _, v := range conns {
-				if v.Status == pbs.CONNECTIONSTATUS_CONNECTIONSTATUS_CONNECTED {
-					activeConnection = true
-					return false
-				}
-			}
-			return true
-		})
-	return activeConnection
-}
-
-// Graceful shutdown sets the worker state to "shutdown" and will wait to return until there
+// GracefulShutdownm sets the worker state to "shutdown" and will wait to return until there
 // are no longer any active connections.
 func (w *Worker) GracefulShutdown() error {
 	const op = "worker.(Worker).GracefulShutdown"
 	event.WriteSysEvent(w.baseContext, op, "worker entering graceful shutdown")
 	w.operationalState.Store(server.ShutdownOperationalState)
 
-	// Wait for connections to drain
-	for w.hasActiveConnection() {
+	// As long as some status has been sent in the past, wait for 2 status
+	// updates to be sent since we've updated our operational state.
+	lastStatusTime := w.lastSuccessfulStatusTime()
+	if lastStatusTime != w.workerStartTime {
+		for i := 0; i < 2; i++ {
+			for {
+				if lastStatusTime != w.lastSuccessfulStatusTime() {
+					lastStatusTime = w.lastSuccessfulStatusTime()
+					break
+				}
+				time.Sleep(time.Millisecond * 250)
+			}
+		}
+	}
+
+	// Wait for running proxy connections to drain
+	for proxy.ProxyState.CurrentProxiedConnections() > 0 {
 		time.Sleep(time.Millisecond * 250)
 	}
 	event.WriteSysEvent(w.baseContext, op, "worker connections have drained")

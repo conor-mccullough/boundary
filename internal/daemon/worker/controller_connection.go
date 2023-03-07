@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package worker
 
 import (
@@ -20,10 +23,12 @@ import (
 
 	"github.com/hashicorp/boundary/globals"
 	"github.com/hashicorp/boundary/internal/cmd/base"
+	"github.com/hashicorp/boundary/internal/daemon/cluster"
 	"github.com/hashicorp/boundary/internal/daemon/worker/internal/metric"
 	"github.com/hashicorp/boundary/internal/errors"
 	pbs "github.com/hashicorp/boundary/internal/gen/controller/servers/services"
 	"github.com/hashicorp/boundary/internal/observability/event"
+	"github.com/hashicorp/boundary/version"
 	"github.com/hashicorp/go-secure-stdlib/base62"
 	"github.com/hashicorp/nodeenrollment"
 	"github.com/hashicorp/nodeenrollment/multihop"
@@ -33,9 +38,10 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/resolver"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
-const hcpbUrlSuffix = ".proxy.boundary.hashicorp.cloud:9202"
+var HandleHcpbClusterId func(s string) string
 
 // StartControllerConnections starts up the resolver and initiates controller
 // connection client creation
@@ -48,7 +54,7 @@ func (w *Worker) StartControllerConnections() error {
 			initialAddrs = append(initialAddrs, addr)
 		default:
 			host, port, err := net.SplitHostPort(addr)
-			if err != nil && strings.Contains(err.Error(), "missing port in address") {
+			if err != nil && strings.Contains(err.Error(), globals.MissingPortErrStr) {
 				host, port, err = net.SplitHostPort(net.JoinHostPort(addr, "9201"))
 			}
 			if err != nil {
@@ -59,8 +65,8 @@ func (w *Worker) StartControllerConnections() error {
 	}
 
 	if len(initialAddrs) == 0 {
-		if w.conf.RawConfig.HcpbClusterId != "" {
-			clusterAddress := fmt.Sprintf("%s%s", w.conf.RawConfig.HcpbClusterId, hcpbUrlSuffix)
+		if w.conf.RawConfig.HcpbClusterId != "" && HandleHcpbClusterId != nil {
+			clusterAddress := HandleHcpbClusterId(w.conf.RawConfig.HcpbClusterId)
 			initialAddrs = append(initialAddrs, clusterAddress)
 			event.WriteSysEvent(w.baseContext, op, fmt.Sprintf("Setting HCP Boundary cluster address %s as upstream address", clusterAddress))
 		} else {
@@ -77,8 +83,14 @@ func (w *Worker) StartControllerConnections() error {
 	return nil
 }
 
-func (w *Worker) controllerDialerFunc(extraAlpnProtos ...string) func(context.Context, string) (net.Conn, error) {
-	const op = "worker.(Worker).controllerDialerFunc"
+// upstreamDialerFunc dials an upstream server. extraAlpnProtos can be provided
+// to kms and pki connections and are used for identifying, on the server side,
+// the intended purpose of the connection.  upstreamDialerFunc takes an optional
+// stateProvidingFunction which, if the connection is made using the nodeenrollment
+// library, sends the state provided by it to the server and can be retrieved
+// from the resulting *protocol.Conn.
+func (w *Worker) upstreamDialerFunc(extraAlpnProtos ...string) func(context.Context, string) (net.Conn, error) {
+	const op = "worker.(Worker).upstreamDialerFunc"
 	return func(ctx context.Context, addr string) (net.Conn, error) {
 		var conn net.Conn
 		var err error
@@ -86,10 +98,16 @@ func (w *Worker) controllerDialerFunc(extraAlpnProtos ...string) func(context.Co
 		case w.conf.WorkerAuthKms != nil && !w.conf.DevUsePkiForUpstream:
 			conn, err = w.v1KmsAuthDialFn(ctx, addr, extraAlpnProtos...)
 		default:
+			var st *structpb.Struct
+			st, err = w.workerConnectionInfo(addr)
+			if err != nil {
+				event.WriteError(w.baseContext, op, err)
+			}
 			conn, err = protocol.Dial(
 				ctx,
 				w.WorkerAuthStorage,
 				addr,
+				nodeenrollment.WithState(st),
 				nodeenrollment.WithWrapper(w.conf.WorkerAuthStorageKms),
 				nodeenrollment.WithExtraAlpnProtos(extraAlpnProtos),
 				// If the activation token hasn't been populated, this won't do
@@ -202,7 +220,7 @@ func (w *Worker) createClientConn(addr string) error {
 		grpc.WithUnaryInterceptor(metric.InstrumentClusterClient()),
 		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(math.MaxInt32)),
 		grpc.WithDefaultCallOptions(grpc.MaxCallSendMsgSize(math.MaxInt32)),
-		grpc.WithContextDialer(w.controllerDialerFunc()),
+		grpc.WithContextDialer(w.upstreamDialerFunc()),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithDefaultServiceConfig(defServiceConfig),
 		// Don't have the resolver reach out for a service config from the
@@ -235,9 +253,10 @@ func (w *Worker) createClientConn(addr string) error {
 func (w *Worker) workerAuthTLSConfig(extraAlpnProtos ...string) (*tls.Config, *base.WorkerAuthInfo, error) {
 	var err error
 	info := &base.WorkerAuthInfo{
-		Name:         w.conf.RawConfig.Worker.Name,
-		Description:  w.conf.RawConfig.Worker.Description,
-		ProxyAddress: w.conf.RawConfig.Worker.PublicAddr,
+		Name:            w.conf.RawConfig.Worker.Name,
+		Description:     w.conf.RawConfig.Worker.Description,
+		ProxyAddress:    w.conf.RawConfig.Worker.PublicAddr,
+		BoundaryVersion: version.Get().VersionNumber(),
 	}
 
 	info.ConnectionNonce, err = w.nonceFn(20)
@@ -335,4 +354,24 @@ func (w *Worker) workerAuthTLSConfig(extraAlpnProtos ...string) (*tls.Config, *b
 	}
 
 	return tlsConfig, info, nil
+}
+
+// workerConnectionInfo returns the worker's cluster.WorkerConnectionInfo as
+// a struct suitable to be used as the state field in a *protocol.Conn
+func (w *Worker) workerConnectionInfo(addr string) (*structpb.Struct, error) {
+	const op = "worker.(Worker).workerConnectionInfo"
+	wci := &cluster.WorkerConnectionInfo{
+		UpstreamAddress: addr,
+		BoundaryVersion: version.Get().VersionNumber(),
+	}
+	if w.LastStatusSuccess() != nil && len(w.LastStatusSuccess().GetWorkerId()) > 0 {
+		// even though we wont have the worker the first time we dial, any
+		// redial attempts should result in the worker id being populated
+		wci.WorkerId = w.LastStatusSuccess().GetWorkerId()
+	}
+	st, err := wci.AsConnectionStateStruct()
+	if err != nil {
+		return nil, errors.Wrap(w.baseContext, err, op, errors.WithMsg("getting worker state"))
+	}
+	return st, nil
 }

@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package version
 
 import (
@@ -30,14 +33,11 @@ func EnableFeatureOnVersionForTest(t *testing.T, version *gvers.Version, feature
 	newConstraint, err := gvers.NewConstraint(fmt.Sprintf(">= %s", versionNumber))
 	require.NoError(err)
 
-	meta := metadataStringToMetadata(version.Metadata())
 	featureMap[feature] = MetadataConstraint{
-		MetaInfo:    []Metadata{meta},
 		Constraints: newConstraint,
 	}
 
-	resetFunc := func() {
+	t.Cleanup(func() {
 		featureMap[feature] = featConstraint
-	}
-	t.Cleanup(resetFunc)
+	})
 }
