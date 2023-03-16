@@ -8,7 +8,6 @@ terraform {
 
 resource "random_string" "cluster_id" {
   length  = 8
-  lower   = true
   upper   = false
   numeric = false
   special = false
@@ -39,12 +38,13 @@ resource "random_integer" "az" {
   max = length(data.aws_availability_zones.available.names) - 1
   keepers = {
     # Generate a new integer each time the list of aws_availability_zones changes
-    listener_arn = data.aws_availability_zones.available.names
+    # keepers have to be strings, sort the list in case order changes but zones don't
+    listener_arn = join("", sort(data.aws_availability_zones.available.names))
   }
 }
 
 resource "aws_subnet" "default" {
-  vpc_id                  = aws_vpc.enos_vpc.id
+  vpc_id                  = var.vpc_name
   cidr_block              = "10.13.10.0/24"
   map_public_ip_on_launch = true
   availability_zone       = data.aws_availability_zones.available.names[random_integer.az.result]
@@ -57,7 +57,7 @@ resource "aws_subnet" "default" {
 }
 
 resource "aws_security_group" "default" {
-  vpc_id = aws_vpc.enos_vpc.id
+  vpc_id = var.vpc_name
 
   ingress {
     description = "allow traffic from all IPs"
@@ -102,7 +102,7 @@ resource "aws_instance" "worker" {
     var.common_tags,
     {
       Name = "${var.name_prefix}-boundary-solo-worker",
-      Type = var.boundary_cluster_tag,
+      Type = var.cluster_tag,
     },
   )
 }
