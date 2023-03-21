@@ -2,7 +2,21 @@
 -- SPDX-License-Identifier: MPL-2.0
 
 begin;
-  alter table host_plugin_host add column external_name text;
+  alter table host_plugin_host
+    add column external_name text
+      -- As it currently stands, AWS restricts EC2 Instance names to 256 UTF-8
+      -- characters. Azure restricts their VM resource names to, at most, 64
+      -- characters, and also have a list of disallowed runes.
+      --
+      -- These constraints follow the lowest common denominator between both
+      -- providers for maximum compatibility. They are also synced with their
+      -- logical counterpart (see `NewHost` in internal/host/plugin/host.go) to
+      -- prevent a situation where a bad name could make an update job stop
+      -- working.
+      constraint external_name_only_has_printable_characters
+        check (external_name is null or external_name !~ '[^[:print:]]')
+      constraint external_name_has_max_256_characters
+        check (external_name is null or length(external_name) <= 256);
 
   -- Replaces view from 44/02_hosts.up.sql
   drop view host_plugin_host_with_value_obj_and_set_memberships;

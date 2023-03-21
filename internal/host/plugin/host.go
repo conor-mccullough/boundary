@@ -11,6 +11,7 @@ import (
 	"github.com/hashicorp/boundary/internal/db/timestamp"
 	"github.com/hashicorp/boundary/internal/host/plugin/store"
 	"github.com/hashicorp/boundary/internal/oplog"
+	"github.com/hashicorp/go-secure-stdlib/strutil"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -30,6 +31,14 @@ type Host struct {
 // WithPluginId, WithPublicId. Others ignored.
 func NewHost(ctx context.Context, catalogId, externalId string, opt ...Option) *Host {
 	opts := getOpts(opt...)
+
+	// This check is the logical counterpart of the database constraints on the
+	// external_name field. By replicating the checks as closely as possible in
+	// code, we reduce the risk of SetSyncJob failing due to a bad external
+	// name.
+	if !strutil.Printable(opts.withExternalName) || len(opts.withExternalName) > 256 {
+		opts.withExternalName = ""
+	}
 
 	h := &Host{
 		PluginId: opts.withPluginId,
