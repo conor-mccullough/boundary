@@ -247,13 +247,20 @@ jobs:
         run: |
           mkdir -p ./enos/terraform-plugin-cache
           export ENOS_VAR_enos_user=$GITHUB_ACTOR && \
-          enos scenario run --timeout 60m0s --chdir ./enos ${{ matrix.filter }}
+          enos scenario launch --timeout 60m0s --chdir ./enos ${{ matrix.filter }}
       - name: Upload e2e tests output
         uses: actions/upload-artifact@0b7f8abb1508181956e8e162db84b466c27e18ce # v3.1.2
         with:
           name: test-e2e-output
           path: enos/test*.log
           retention-days: 5
+      - name: Docker logs
+        run: |
+          ssh -V
+          docker logs boundary
+      - name: Docker logs (more)
+        run: |
+          docker logs openssh-server
       - name: Upload e2e UI tests debug info
         if: matrix.filter == 'e2e_ui builder:crt' && steps.run.outcome == 'failure'
         uses: actions/upload-artifact@v3
@@ -277,7 +284,7 @@ jobs:
           ENOS_VAR_boundary_docker_image_file: ./support/boundary_docker_image.tar
         run: |
           export ENOS_VAR_enos_user=$GITHUB_ACTOR && \
-          enos scenario run --timeout 60m0s --chdir ./enos ${{ matrix.filter }}
+          enos scenario launch --timeout 60m0s --chdir ./enos ${{ matrix.filter }}
       - name: Destroy Enos scenario
         if: ${{ always() && steps.run_retry.outcome == 'failure' }}
         env:
@@ -292,6 +299,7 @@ jobs:
           ENOS_VAR_boundary_docker_image_name: ${{ inputs.docker-image-name }}
           ENOS_VAR_boundary_docker_image_file: ./support/boundary_docker_image.tar
         run: |
+          docker logs boundary
           export ENOS_VAR_enos_user=$GITHUB_ACTOR && \
           enos scenario destroy --timeout 60m0s --chdir ./enos ${{ matrix.filter }}
       - name: Output Enos debug information on failure

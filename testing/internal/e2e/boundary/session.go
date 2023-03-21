@@ -81,6 +81,14 @@ func WaitForSessionStatusCli(t testing.TB, ctx context.Context, sessionId string
 			}
 			s := sessionReadResult.Item
 
+			t.Logf("Id: %s", sessionReadResult.Item.Id)
+			t.Logf("Created Time: %s", sessionReadResult.Item.CreatedTime)
+			t.Logf("Updated Time: %s", sessionReadResult.Item.UpdatedTime)
+			t.Logf("Expiration Time: %s", sessionReadResult.Item.ExpirationTime)
+			for _, v := range sessionReadResult.Item.States {
+				t.Logf("Status: %s, Start Time: %s, End Time: %s", v.Status, v.StartTime, v.EndTime)
+			}
+			t.Logf("Termination Reason: %s", sessionReadResult.Item.TerminationReason)
 			if s.Status != status {
 				return errors.New(fmt.Sprintf("Waiting for session status... Expected: %s, Actual: %s",
 					status,
