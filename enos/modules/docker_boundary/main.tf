@@ -102,12 +102,20 @@ resource "docker_container" "boundary" {
   }
 }
 
-resource "enos_local_exec" "wait" {
+resource "enos_local_exec" "check_address" {
   depends_on = [
     docker_container.boundary
   ]
 
   inline = ["timeout 10s bash -c 'until curl http://0.0.0.0:9200; do sleep 2; done'"]
+}
+
+resource "enos_local_exec" "check_health" {
+  depends_on = [
+    enos_local_exec.check_address
+  ]
+
+  inline = ["timeout 10s bash -c 'until curl -i http://0.0.0.0:9203/health; do sleep 2; done'"]
 }
 
 output "address" {
