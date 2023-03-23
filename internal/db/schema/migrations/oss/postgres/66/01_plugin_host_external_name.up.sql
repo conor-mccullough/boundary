@@ -14,9 +14,9 @@ begin;
       -- prevent a situation where a bad name could make an update job stop
       -- working.
       constraint external_name_only_has_printable_characters
-        check (external_name is null or external_name !~ '[^[:print:]]')
+        check (external_name !~ '[^[:print:]]')
       constraint external_name_has_max_256_characters
-        check (external_name is null or length(external_name) <= 256);
+        check (length(external_name) <= 256);
 
   -- Replaces view from 44/02_hosts.up.sql
   drop view host_plugin_host_with_value_obj_and_set_memberships;
