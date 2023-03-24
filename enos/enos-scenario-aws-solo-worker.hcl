@@ -98,6 +98,7 @@ scenario "aws_solo_worker_testing" {
       iam_instance_profile_name = step.create_boundary_cluster.iam_instance_profile_name
       name_prefix               = step.create_boundary_cluster.name_prefix
       cluster_tag               = step.create_boundary_cluster.cluster_tag
+      project_name              = var.project_name
     }
   }
 

@@ -11,7 +11,7 @@ module "bats_deps" {
 
 module "boundary" {
   source  = "app.terraform.io/hashicorp-qti/aws-boundary/enos"
-  version = ">= 0.2.6"
+  version = ">= 0.4.0"
 
   project_name = "qti-enos-boundary"
   environment  = var.environment
