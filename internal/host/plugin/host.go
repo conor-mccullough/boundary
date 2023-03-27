@@ -5,11 +5,13 @@ package plugin
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"strings"
 
 	"github.com/hashicorp/boundary/internal/db/timestamp"
 	"github.com/hashicorp/boundary/internal/host/plugin/store"
+	"github.com/hashicorp/boundary/internal/observability/event"
 	"github.com/hashicorp/boundary/internal/oplog"
 	"github.com/hashicorp/go-secure-stdlib/strutil"
 	"google.golang.org/protobuf/proto"
@@ -30,6 +32,7 @@ type Host struct {
 // Supported options: WithName, WithDescription, WithIpAddresses, WithDnsNames,
 // WithPluginId, WithPublicId. Others ignored.
 func NewHost(ctx context.Context, catalogId, externalId string, opt ...Option) *Host {
+	const op = "plugin.NewHost"
 	opts := getOpts(opt...)
 
 	// This check is the logical counterpart of the database constraints on the
@@ -37,6 +40,11 @@ func NewHost(ctx context.Context, catalogId, externalId string, opt ...Option) *
 	// code, we reduce the risk of SetSyncJob failing due to a bad external
 	// name.
 	if !strutil.Printable(opts.withExternalName) || len(opts.withExternalName) > 256 {
+		event.WriteError(ctx, op,
+			fmt.Errorf("ignoring host id %q external name %q due to its length (greater than 256 characters) or the presence of unsupported unicode characters",
+				opts.withPublicId,
+				opts.withExternalName),
+		)
 		opts.withExternalName = ""
 	}
 
